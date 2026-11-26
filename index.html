@@ -1,0 +1,1608 @@
+<!doctype html>
+<html lang="fi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>OfferHut — varaa puhumalla</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+<!--
+  КАРКАС голосового бронирования OfferHut.
+
+  Механика взята от демо HORECA (horeca\demo-site\index.html): один файл без
+  сборки, запись голоса через MediaRecorder с обходами поломок Safari,
+  ни ключей ни промптов в странице — всё в воркере.
+
+  Оформление снято с offerhut.fi: белый фон, серые секции #f5f5f5, синяя
+  кнопка #4793b8, бирюзовый знак #377f89, текст #2c2c2c, подписи полей
+  мелкими прописными вразрядку, карточка объекта с картинкой сверху и
+  ценой «alk 100 €» справа, красный бейдж скидки, Roboto, скругления 4px.
+
+  Смысл приложения — лень гостя. Он не станет заполнять простыню полей,
+  ему проще ткнуть две кнопки на Букинге. Поэтому поля заполняет голос,
+  кнопки остаются там, где ткнуть быстрее, чем сказать.
+
+  ЗАГЛУШКИ, ждут данных заказчика:
+    HAE_URL    эндпоинт поиска по базе сайта (сейчас его нет, см. отчёт)
+    OBJEKTIT   3-4 объекта, пока образцы
+    LISAT      доп. услуги с ценами
+    KRITEERIT  простыня уточнений: добавить строку сюда и в промпт воркера
+    maksuun()  переход на оплату
+-->
+<style>
+  :root{
+    --blue:#4793b8; --blue-dk:#377f89; --pale:#dae9f1; --pale2:#d7e5e7;
+    --ink:#2c2c2c; --dim:#808080; --line:#ededed; --soft:#f5f5f5;
+    --red:#da6060; --white:#fff;
+    --r:4px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0; padding:0}
+  body{
+    background:var(--soft); color:var(--ink);
+    font:400 16px/1.5 Roboto,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .app{max-width:480px; margin:0 auto; background:var(--white); min-height:100vh; padding-bottom:28px; position:relative}
+  @media(min-width:520px){ .app{box-shadow:0 0 40px rgba(0,0,0,.08)} }
+
+  /* шапка как на сайте */
+  .bar{
+    position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:11px;
+    padding:14px 18px; background:var(--white); border-bottom:1px solid var(--line);
+  }
+  .bar .logo{
+    width:36px; height:36px; border-radius:8px; background:var(--blue-dk); color:#fff;
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  }
+  .bar .logo svg{width:20px; height:20px; fill:currentColor}
+  .bar b{font-size:19px; font-weight:700; letter-spacing:-.01em}
+  /* Выбор языка — справа в шапке, как на offerhut.fi. Тот же приём,
+     что у остальных подписей: мелкие прописные вразрядку. */
+  .kieli{
+    margin-left:auto; background:transparent; border:0; cursor:pointer;
+    font:inherit; font-size:11px; font-weight:500; letter-spacing:.09em;
+    text-transform:uppercase; color:var(--ink); padding:4px 2px;
+  }
+  .kieli:focus{outline:none}
+  body.foto .kieli{color:#fff}
+  .kieli option{color:var(--ink); text-transform:none; letter-spacing:0}
+
+  h1{margin:18px 18px 4px; font-size:26px; font-weight:700; letter-spacing:-.01em}
+  h2{
+    margin:22px 18px 10px; font-size:21px; font-weight:700; letter-spacing:-.01em;
+  }
+  .lead{margin:0 18px 2px; color:var(--dim); font-size:14.5px}
+  .lbl{
+    display:block; margin:0 0 7px; font-size:11.5px; font-weight:500; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--dim);
+  }
+
+  /* ФОН — на весь экран, а не полосой. Фото лежит под всем приложением
+     и не двигается при прокрутке, поверх него идёт затемнение. */
+  .shot{position:fixed; inset:0; z-index:0; overflow:hidden}
+  /* Верстаем телефон. Кадр вертикальный 490x872 и показывается целиком:
+     с заполнением он обрезается и увеличивается. */
+  .shot{background:#0d1316 url("img/bg.jpg") center top/contain no-repeat}
+  /* Карта Финляндии поверх фона, как на offerhut.fi. Точки показывают,
+     что объекты есть по всей стране: мелкие, много, мерцают вразнобой. */
+  .kartta{
+    /* Карта целиком помещается в место фото: от шапки до строки
+       вопроса, панель её не режет. */
+    /* Положение считает скрипт: карта стоит ровно посередине между
+       подписью HAKUTULOS и строкой вопроса. В процентах от высоты
+       экрана зазоры получались разными на разных окнах. */
+    position:absolute; left:50%; transform:translateX(-50%);
+    height:42%; aspect-ratio:284/580; pointer-events:none;
+  }
+  .kartta svg{width:100%; height:100%; display:block; overflow:visible}
+  .kartta .maa path{fill:rgba(255,255,255,.37); stroke:rgba(255,255,255,.73); stroke-width:.7}
+  /* Точки цветом знака в шапке. */
+  .kartta .piste{fill:var(--blue-dk); filter:drop-shadow(0 0 2px rgba(255,255,255,.9)); animation-name:vilku; animation-iteration-count:infinite;
+    animation-timing-function:ease-in-out;}
+  @keyframes vilku{
+    0%,100%{opacity:.22; r:1.2}
+    50%{opacity:1; r:2.8}
+  }
+  @media(prefers-reduced-motion:reduce){ .kartta .piste{animation:none; opacity:.6} }
+
+  .shot .veil{
+    position:absolute; inset:0;
+    background:linear-gradient(180deg, rgba(0,0,0,.34) 0%, rgba(0,0,0,.10) 24%,
+                                        rgba(0,0,0,.34) 60%, rgba(0,0,0,.78) 100%);
+  }
+  /* Пока идёт разговор, приложение прозрачное и всё видно на фото.
+     На экранах выбора и оплаты возвращается белый лист. */
+  body.foto .app{background:transparent}
+  body.foto .bar{background:transparent; border-bottom:0}
+  body.foto .bar b{color:#fff}
+  body.foto .msg.bot{background:rgba(0,0,0,.46); border-color:rgba(255,255,255,.18); color:#fff}
+  body.foto .msg.me{background:rgba(255,255,255,.92); color:var(--ink)}
+  .app{position:relative; z-index:1}
+
+  .hero{position:relative; padding-top:14px}
+
+  /* ГАЛЕРЕЯ — перенесено с visuals.ai-craft-studio.com как есть.
+     Главное, чего у меня не было: соседние карточки уменьшены и притушены,
+     центральная полного размера и яркая, подпись показывается только у неё.
+     Размер задаётся высотой, ширина выходит из пропорции 9:16, а отступы
+     ленты — max(18px, половина экрана минус половина карточки). */
+  /* До поиска галереи нет: показывать нечего. */
+  .railwrap{position:relative; margin-top:10px}
+  /* До поиска фото нет, но место под него остаётся: всё остальное —
+     вопрос, панель, параметры — стоит там же, где и с результатом. */
+  .hero.tyhja .rail{min-height:var(--h)}
+  .hero.tyhja .nav{display:none}
+  .rail{
+    --h: min(58vh, 464px);
+    --half: calc(var(--h) * 9 / 16 / 2);
+    position:relative; z-index:1;
+    display:flex; gap:16px; overflow-x:auto; overflow-y:hidden;
+    scroll-snap-type:x mandatory; scrollbar-width:none; -webkit-overflow-scrolling:touch;
+    padding-inline:max(18px, calc(50% - var(--half)));
+    padding-block:10px 18px;
+  }
+  .rail::-webkit-scrollbar{display:none}
+  .rail.dragging{cursor:grabbing; scroll-snap-type:none}
+
+  .rail .item{
+    position:relative; flex:0 0 auto;
+    height:var(--h); aspect-ratio:9/16;
+    border-radius:18px; overflow:hidden; scroll-snap-align:center;
+    background:#0d1316;
+    transform:scale(.78);
+    filter:brightness(.45) saturate(.6);
+    transition:transform .5s cubic-bezier(.25,.9,.3,1), filter .5s, box-shadow .5s;
+    will-change:transform;
+    box-shadow:0 12px 30px rgba(0,0,0,.55);
+  }
+  .rail .item.active{
+    transform:scale(1); filter:none; z-index:2;
+    box-shadow:0 2px 1px rgba(255,255,255,.07),
+               0 30px 64px -18px rgba(0,0,0,.8),
+               0 0 70px -30px rgba(71,147,184,.6);
+  }
+  .rail .item img{width:100%; height:100%; object-fit:cover; display:block; pointer-events:none}
+  .rail .item .shade{
+    position:absolute; left:0; right:0; bottom:0; height:52%;
+    background:linear-gradient(to top, rgba(0,0,0,.88), rgba(0,0,0,.35) 45%, rgba(0,0,0,0));
+    pointer-events:none; z-index:2;
+  }
+  /* подпись есть только у той карточки, что сейчас в середине */
+  .rail .item .cap{
+    position:absolute; left:0; right:0; bottom:16px; padding:0 16px;
+    display:flex; flex-direction:column; gap:4px; color:#fff;
+    pointer-events:none; z-index:3;
+    opacity:0; transform:translateY(6px); transition:opacity .4s, transform .4s;
+  }
+  .rail .item.active .cap{opacity:1; transform:translateY(0)}
+  .rail .item .cap i{display:block; font-style:normal; font-size:12px; letter-spacing:.07em;
+    text-transform:uppercase; color:rgba(255,255,255,.78)}
+  .rail .item .cap b{display:block; font-size:21px; font-weight:800; letter-spacing:-.02em; line-height:1.1}
+  .rail .item .hinta{
+    position:absolute; right:11px; top:11px; z-index:3;
+    background:rgba(255,255,255,.94); color:var(--ink);
+    font-size:13px; font-weight:700; padding:5px 9px; border-radius:4px;
+  }
+  .nav{
+    position:absolute; top:50%; transform:translateY(-50%); z-index:6;
+    width:42px; height:42px; border-radius:50%; cursor:pointer;
+    border:1px solid rgba(255,255,255,.35); background:rgba(0,0,0,.42);
+    backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+    color:#fff; font-size:19px; line-height:1;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .nav:disabled{opacity:.25; cursor:default}
+  .nav.prev{left:10px} .nav.next{right:10px}
+  /* Оба счётчика — один типографический приём: слово мелкими прописными
+     вразрядку плюс цифры. Разные блоки, но видно, что сайт один. */
+  .merkki{
+    font-size:11px; font-weight:500; letter-spacing:.09em; text-transform:uppercase;
+    color:rgba(255,255,255,.62); white-space:nowrap;
+  }
+  .merkki b{
+    font-weight:700; color:#bfe0ef; font-variant-numeric:tabular-nums;
+    letter-spacing:.04em; margin-left:5px;
+  }
+  .laskuri{text-align:center; margin:0 0 8px}
+
+  /* Над панелью стоит ТЕКУЩИЙ вопрос и только он: сменяется, а не копится.
+     Разговор целиком лежит внутри рамки ввода, разобранное — под панелью. */
+  .kysymys{
+    font-size:15.5px; line-height:1.38; color:#fff; margin:0 22px 8px;
+    display:flex; gap:8px; align-items:baseline; min-height:21px;
+    text-shadow:0 1px 3px rgba(0,0,0,.55);
+  }
+  .kysymys .merkki{flex-shrink:0}
+  .kysymys.wait{color:rgba(255,255,255,.7); font-style:italic}
+
+  /* Ответы под панелью — просто читаемый текст, без рамок и заливки.
+     В прямоугольниках их принимали за кнопки и пытались нажать. */
+  .ehdot{display:flex; flex-wrap:wrap; gap:4px 22px; padding:12px 14px 0; margin:0 10px}
+  .ehto{flex:0 1 auto; display:flex; gap:7px; align-items:baseline}
+  .ehto .nimi{
+    font-size:11px; font-weight:500; letter-spacing:.07em; text-transform:uppercase;
+    color:rgba(255,255,255,.6);
+  }
+  .ehto .arvo{font-size:15px; font-weight:700; color:#fff}
+  .ehto.auki .arvo{color:rgba(255,255,255,.45); font-weight:400}
+  .ehto.kysytaan .nimi{color:#bfe0ef}
+  .ehto.kysytaan .arvo{color:#bfe0ef}
+
+  /* что агент уже знает */
+  /* Собранные критерии показываются в панели микрофона, а не на фоне:
+     всё управление должно быть в одном месте, под большим пальцем. */
+  .chips{display:flex; flex-wrap:wrap; gap:6px; padding:0 2px 9px}
+  .chips:empty{display:none}
+  .chip{
+    background:var(--pale); color:var(--blue-dk); border-radius:var(--r);
+    padding:5px 10px; font-size:12.5px; white-space:nowrap;
+  }
+  .chip b{font-weight:700}
+
+  /* карточка объекта — как на offerhut.fi */
+  .cards{padding:0 18px}
+  .card{
+    background:var(--white); border:1px solid var(--line); border-radius:var(--r);
+    margin-bottom:14px; overflow:hidden;
+  }
+  .card .pic{position:relative; height:172px; background:var(--pale2)}
+  .card .pic img{width:100%; height:100%; object-fit:cover; display:block}
+  .card .pic .noimg{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:#9db3bb; font-size:13px;
+  }
+  .card .off{
+    position:absolute; left:0; top:12px; background:var(--red); color:#fff;
+    font-size:13px; font-weight:700; padding:4px 10px; border-radius:0 var(--r) var(--r) 0;
+  }
+  .card .fav{
+    position:absolute; right:12px; top:12px; width:34px; height:34px; border-radius:50%;
+    background:rgba(255,255,255,.9); border:0; color:var(--dim); font-size:17px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .card .body{padding:14px 15px}
+  .card .body b.nimi{display:block; font-size:17.5px; font-weight:700; letter-spacing:-.01em}
+  .card .body .alue{display:block; color:var(--dim); font-size:14px; margin-top:5px}
+  .card .body .pvm{display:block; color:var(--dim); font-size:14px}
+  .card .spec{display:flex; gap:14px; flex-wrap:wrap; color:var(--ink); font-size:14px; margin-top:7px}
+  .card .row{display:flex; align-items:flex-end; justify-content:space-between; gap:12px; margin-top:12px}
+  .card .hinta{text-align:right; line-height:1.15}
+  .card .hinta small{display:block; color:var(--dim); font-size:12px}
+  .card .hinta b{font-size:21px; font-weight:700; font-variant-numeric:tabular-nums}
+
+  .btn{
+    border:0; border-radius:var(--r); padding:13px 20px; font:inherit; font-weight:700;
+    font-size:15.5px; background:var(--blue); color:#fff; cursor:pointer;
+  }
+  .btn.wide{width:100%; padding:15px}
+  .btn.ghost{background:transparent; border:1px solid var(--blue); color:var(--blue)}
+  .btn:disabled{opacity:.45; cursor:default}
+  a.more{color:var(--blue); text-decoration:none; font-weight:500; font-size:15px}
+
+  /* Действие, которое не должно читаться как кнопка: подчёркнутый текст,
+     без рамки и заливки. Прямоугольники внизу экрана заказчик принимал
+     за кнопки — здесь наоборот, нажимать действительно надо. */
+  button.link{
+    background:0; border:0; padding:0; font:inherit; cursor:pointer;
+    text-decoration:underline; text-underline-offset:3px;
+  }
+  /* «Новый поиск» стоит под параметрами, поверх фото — значит белым. */
+  .uusi{margin:16px 24px 0}
+  .uusi button.link{color:#fff; font-size:14px; opacity:.85}
+  /* Возврат к результатам — вверху карточки. Именно кнопка с рамкой:
+     подчёркнутым текстом её не замечали. */
+  .takaisin{margin:0 18px 14px}
+  .takaisin .btn{padding:11px 16px; font-size:14.5px}
+
+  /* Карточка объекта: то же оформление, что у списка, но фото крупнее —
+     на неё проваливаются ради фотографии. */
+  #kortti .pic{height:230px}
+  #kortti .varusteet{display:flex; flex-wrap:wrap; gap:7px; margin-top:12px}
+  #kortti .varusteet span{
+    background:var(--soft); border:1px solid var(--line); border-radius:999px;
+    padding:5px 11px; font-size:13.5px; color:var(--ink);
+  }
+
+  /* допы */
+  .lisat{padding:0 18px}
+  .ryhma{margin-top:18px}
+  .ryhma .lbl{margin-bottom:2px}
+  .lisa{display:flex; align-items:center; gap:12px; padding:13px 0; border-bottom:1px solid var(--line)}
+  .lisa .t{flex:1; min-width:0}
+  .lisa .t b{display:block; font-size:15.5px; font-weight:500}
+  .lisa .t small{display:block; color:var(--dim); font-size:13px; margin-top:2px}
+  .lisa .p{color:var(--ink); font-weight:700; white-space:nowrap; font-variant-numeric:tabular-nums}
+  .sw{
+    width:48px; height:28px; border-radius:14px; border:1px solid #d6d6d6; background:#f0f0f0;
+    position:relative; cursor:pointer; flex-shrink:0;
+  }
+  .sw::after{
+    content:""; position:absolute; top:2px; left:2px; width:22px; height:22px; border-radius:50%;
+    background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.2); transition:.18s;
+  }
+  .sw.on{border-color:var(--blue); background:var(--blue)}
+  .sw.on::after{left:23px}
+
+  /* поля формы */
+  .field{padding:0 18px; margin-top:16px}
+  .field input{
+    width:100%; background:var(--white); border:1px solid #dcdcdc; color:var(--ink);
+    border-radius:var(--r); padding:13px 14px; font:inherit; font-size:16px;
+  }
+  .field input::placeholder{color:#b3b3b3}
+  .field input:focus{outline:none; border-color:var(--blue)}
+  .hint{font-size:13px; color:var(--dim); margin:9px 18px 0}
+
+  /* итог */
+  .total{
+    margin:18px 18px 0; background:var(--soft); border:1px solid var(--line);
+    border-radius:var(--r); padding:14px 15px;
+  }
+  .total .r{display:flex; justify-content:space-between; font-size:14.5px; color:var(--dim); padding:3px 0}
+  .total .r b{color:var(--ink); font-weight:400}
+  .total .s{display:flex; justify-content:space-between; align-items:baseline; margin-top:10px; padding-top:10px; border-top:1px solid #e3e3e3}
+  .total .s span:first-child{font-weight:700; font-size:16px}
+  .total .s span:last-child{font-weight:700; font-size:22px; font-variant-numeric:tabular-nums}
+
+  /* Нижняя панель. Поднята над краем экрана и микрофон стоит СПРАВА:
+     телефон держат одной рукой, и большой палец достаёт правый нижний
+     угол, а не левый. Поле ввода — слева от него, стрелка отправки
+     внутри поля, чтобы справа была только одна крупная цель. */
+  /* Панель стоит в потоке под галереей, а не прижата к низу экрана.
+     Так у неё есть место расти вверх по мере разговора. */
+  .dock{
+    margin:14px 10px 0; background:var(--white);
+    border:1px solid var(--line); border-radius:16px;
+    padding:12px 12px 10px;
+    box-shadow:0 6px 26px rgba(0,0,0,.14);
+  }
+  .dock .mrow{display:flex; align-items:center; gap:10px}
+  /* Рамка ввода фиксированная по высоте и она же — поле разговора:
+     сверху лента реплик, снизу строка, в которой пишут. Одна рамка,
+     а не две: человек ищет сказанное там же, где отвечает. */
+  .inp{
+    position:relative; flex:1; min-width:0; height:168px;
+    background:var(--white); border:1px solid #dcdcdc; border-radius:12px;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  .inp:focus-within{border-color:var(--blue)}
+  .loki{
+    flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain;
+    padding:11px 14px 4px;
+  }
+  .loki .q{color:var(--dim); font-size:14px; line-height:1.35; margin-bottom:4px}
+  .loki .a{color:var(--ink); font-size:14.5px; line-height:1.35; margin-bottom:10px}
+  .loki .q:last-child, .loki .a:last-child{margin-bottom:0}
+  .dock textarea.say{
+    width:100%; background:var(--white); border:0; border-top:1px solid #ececec;
+    color:var(--ink); padding:10px 46px 10px 14px; font:inherit; font-size:16px;
+    line-height:1.4; height:62px; resize:none; overflow-y:auto; display:block; flex-shrink:0;
+  }
+  .dock textarea.say:focus{outline:none}
+  .dock .send{
+    position:absolute; right:7px; bottom:8px;
+    width:34px; height:34px; border-radius:50%; border:0;
+    background:var(--pale); color:var(--blue-dk); font-size:17px; cursor:pointer;
+  }
+  .mic{
+    width:60px; height:60px; border-radius:50%; background:var(--blue); color:#fff;
+    display:flex; align-items:center; justify-content:center; flex-shrink:0; cursor:pointer; border:0;
+    box-shadow:0 4px 16px rgba(71,147,184,.45);
+  }
+  .mic svg{width:27px; height:27px; fill:currentColor}
+  .mic.rec{background:var(--red); box-shadow:0 4px 16px rgba(218,96,96,.5); animation:pulse 1.1s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+  .dock .st{color:var(--dim); font-size:12.5px; margin:7px 4px 0; min-height:17px; text-align:center}
+
+  .ok{text-align:center; padding:50px 26px}
+  .ok .tick{
+    width:72px; height:72px; border-radius:50%; background:var(--blue); color:#fff;
+    margin:0 auto 20px; display:flex; align-items:center; justify-content:center; font-size:36px;
+  }
+  .ok h3{margin:0 0 10px; font-size:23px; font-weight:700}
+  .ok p{color:var(--dim); margin:0 0 7px}
+  .hide{display:none !important}
+</style>
+</head>
+<body class="foto">
+
+<!-- Фоновое фото на весь экран. Лежит под приложением, при прокрутке
+     не двигается. Меняется вместе с выбранным в галерее объектом. -->
+<div class="shot" id="shot">
+    <div class="kartta" aria-hidden="true">
+      <svg viewBox="0 0 284 580" xmlns="http://www.w3.org/2000/svg">
+        <g class="maa"><g class="region"><path d="M19 563.1l.3-.8-.5-1-.5-.1v.3l.3 1-.2.4-.3-.5-.5-1.4-.2.6-.2.8-.1.7v.8l.2.2.8.4.2.3.2.3h.1l.3-.2-.2-1 .3-.8zm2.7 4.5l-.9-.4-.5-.1-.9 1-.5 1v.8l.6.3.3-.5v-.6l.4-.2h1.4l1.1-.7-.3-.5-.7-.1zm2.8-1.9l.2-.4.2-.3.1-.3-.2-.2-.3.2v.1l.2.1h0l-.9.1-.4.3v.7l.7.3.4-.4v-.2zm-2.2-.3l-.5.7-.3.6.3.3.7-.2.4-.7.3-1.2h-.4l-.5.5zM4.7 559l-.1-.3-.2-.2-.4-.5v-.9l-.2-.4-.1-.3-.5-.5-.3-.2h-.4l-.2.3-.2.3-.4.5-.1.3v1.4l-.2.4-.3.3-.1.2V560l.2 1 .5.7.4.2.5-.3.3-.6.1-.7v-.7l-.3-.9.5.5.5 1 .3.5H4.6V559zm16.6-2.3l.1.3v1.6l.2.1 1.1-2.2V555.6l-.3-.2-.3.3-.8-.4-.5.1-.2.7v.7l.1.4.6-.5zm-8 7.2l.2-.5v-.3l-.2-.2-.1-.1V561.2l.2-1.5-.2.3-.1.3-.2.3h-.4l-.2-.4-.2-.3-.7-.3-.3-.4-.3-.4-.3-.6v-.5l.3-.2h.6v.7l-.1.2.4.4 1.2.6-.1-.5v-.4l.1-.4.3-.3-.5-.4-.4-.8-.3-.9-.1-.8.6.5.5-.4.2-.8-.2-.6v-.4l.9.2-.1.8-.5 1-.3.8.2.9.4.4.3.6-.1 1.1h.2l.4-1.5.6-.8.9-.3h1l-.4.6-1.2.1-.5.5-.1.5-.2.7v.6l.2.3H16l.1.3.2.1.3-.1v-.2l.2-.6.2-.3.2-.3h.4l.3-.2-.2-.3-.3-.7.6-.3.2-.6.8-1.6-1-.2-.4-.2-.4-.3-.1.1-.4.2.3-1.2-.3-.5-1.3-.5-.5-.8-.2-.2-.3.1h-.2l-.8-.4-.3-.1v.3l.3 1-.4-.6-.6-.5-.6-.2-1 .2-.2-.6-.1-1-.2-.5-.6-.2h-.5l-.5.2-.5.6-.2.5-.1.4-.2.4-.4.3h.6l.4.3.3.6.3.8.3.2.1-.3.3-.8.2-.4h.1l.1.2.2.3.3.4.2.5.2.7v.8l-.1.3-.3.2h-.3l-.1-.2v-.8l-.1-.7-.2.7v1l-.1.6-.5.6-.2 1.4-.3-.5-.5-.3.1.5V558.6l-.1.2-.4-.1-.2-.3-.1-1.2-.2-.4-.2-.3v-.4l.3-1 .4-1.4-.2-.2-.2.1-.1-.1-.5-.2.2.5v.3l.3.2-1 .5-.2.1-.3.2-.1.4-.2.5-.1.5v-.8l-.2-.4h-.9l.5 1.9v.3l.3.3.1.6.2 1.3.3 1.2 1 2 .3 1.4.2-.6.4-.5.4-.2.4.3v.5l.2.2H9l.4-.1.2-.2v-.6l.3-.2h.6l.3.5.4 1.4v.5l.2.1.2-.3-.1-.7v-.7l.4-.3 1-.2.5.4v.3zm4 2.4l-.5-1.4-.7-1h-.7l-.7-.4-.8 1-.8.5-.2 1 .8.1.4.5h.6l.5.6-.1.5-.3.4.4.4.7-.2.4-.3.3.3-.2 1 .3-.2.6-.7.3-.7v-.5l-.3-.9zm11-9H28l-.2.5v.6l.2.2.4.3.5-.3.2-.4-.3-.5-.5-.5zm5.2 13.8l-.2-.3H33l-.3.1-.2.4.1.5.2.2.3.2.6.2.1-.2-.1-.5-.2-.6zm1.8-.4l.3-.1v-.2l-.1-.1h-.3l-1-.3-.4.2v.4l.4.4 1.2.6.2-.2-.2-.4-.3-.3v-.1h.2zm2.6-25.2l-.1-.2H37.5l-.3.3-.1.4.1.6.3.2.3-.1.2-.6v-.6zm-7.1 6.4v-.5l-.1-.4-.3-.2H30v.2l-.1.3-.1.2v.1l-.2.5v1.2h.2l.8-.6.2-.4v-.4zm.6 3l-.3-.3h-.4l-.1 1 .2 1.2.7.3-.2-.6h.3l.3-.1.3-.3v-.6l-.2-.2-.6-.5zm-3 7l-.2-.2-.2-.5-.2-.2h-.4l-.2.3v.6l.5.7.3.3h.3l.1-.3v-.7zm-1.8 4v0l-.1-.3h-.4V565.4h-.3l-.2.1h-.2l-.3.1-.3.4-.6 1.1-.1.6.2.2h.4l.3-.2.1-.3.1-.1.6.6h.3l.2-.4.2-.3v-.8h.2-.1v-.4z"></path><title>Åland</title></g><g class="region"><path d="M152 398.2l1.4-.2 2.5-1.2.3.2.5.5-.2.7-1.5 2.6-.3.6.2 1 .4.4.5 1.3.8 3.1.4 1.5v.7l-.5.2-.2.5v1l.2 1.6 1 1.4.7 1.6.9 1.5.6.7.4.7-1.1-.2-.6.2-.2.3v.9l.3.4.6.8.7.4.4.1v.7l-.2.6-.5.6h-.2l-1-.3-1.3-.2-2.8.9-.3.8.4.7.8.8 1.5 1 .5.6-.1.1-.5.8.3.6 4.3 3.8.4.2.4-.6.5-.8.6.1.8.6.8 1 .3.6.1.7.3 1 .5.7.6 1.6.3 1.7-.1.7-.3.5h.2l.1.4-.3.6-2.3 2.9.1.7 2.4 2 .7.4 1.6.1.6.5-.2 1-.2.7v.3l-.2.4.1.5 1.7 1.6v.4l-1.2.3-.7.4-.2.4-.2.6h.2v.5l-.1.2-.4.3-.6.3-.1.5v.3l.2.6v1.1l.3.5.3.3-.2.2h-.6l-.6-.5-.7-.7-.2-.2-.6-.2h-.3l-.5.3-.4.6h.2l.1.1v.3l-.2.3-.3.3-.3.3h-.2l-.7-.5h-.5l-1.6 1.3-2 3v1.9l3.3 5.5v1.2l-.7.4-.3 1v1.2l-.3 1.5H161.4l.2.4v.5l-.2 1.8.2.8.2.4 2 2.3.3.5.8 1.6.2.7v.8l-.3 2.3-.5.4-2.4-1.2-.5.2-.3.7V490l-.1.4-.6.4h-.2l-.2-.4-.1-.4v-.4l.1-.3-.2-.5-.3-.1h-.9l-2 1-.2.2h-.3l-.6-.8-1-.4-.2-.3-.3-.4v-.1l.2-.1v-.4l.2-.5.2-.6v-.5l-.2-.2-.2-.2-.3-.5-.5.5-.5-.1-.2-.4-.3-1-.2-.5-.3-.4-1-.8-.2.2v.4l-.3.5H149.8l-.1-.4.1-.4v-.5l-.1-.4-.2-.2-.3.6-.1.6-.7 2-.8 1.6-.4.4h-.4l.2-.4-.4-.1H144.9l-.8.4-.8.8-.4.2-1.2-.3-.3.2-.3 1.2-.6 4.4-.4 1.8-.4 1.2-.4.6-.6.3-10.2 1.7-.2-.3-.3-1.5-.2-1.5-.3-1-.5-.4-.1-.2.4-.6-.2-.9-.7-.1-.6.5-.5.2-.2-.5-.4-1-.3-.8.2-1.1.7-.8 1 .2 1.5.8.5-.2v-.5l.2-.2v-.8l-.5-.7-.4-.7v-1.6l.4-.3h.4l.2.3.4.2.2-.4v-.7l-.6-1.3v-.5l.3-.2-.5-.2-.5-.5-.2-1.4.2-2 .2-2.4-.2-1.7-1-3.5-.2-.8-.5-.9-2.2 1-.7.1-1.4-.8-.3-.4v-.4l-.1-.8v-1.4l-.3-.5-.5-.3-.5-.9-.5-1-.6-.9-.8-.6h-.7l-1.2.7-.4.3.3.7-.7.3-.9-.2-.3-.4-.7-.4-1-1.7-.2-1-.8-1.4-2-.4-1-.5-1-.6-.5-.5-.4-.7-.3-1-.1-1.8.7-1.3 2-2.6.8-.9.7-.5h.5l2 .6h.4l.3-.6-.2-.6v-.5l1-.5.4.2h.2l.3.2.2.4.1.2.3.1.5-.5.5-.3.3-.1h.3l.2-.4v-.5l.3-.3V444l.1-.2v-.7h0l.3.1h0v-.2h0l-.1-.2v-.4l.1-.1.5-.2v-.4l-.1-.5v-.2l-.1-.2v-.1h.5l.1-.1v-.3l-.1-.2-.7.1h-.7l-.1-.5.2-.3 1.2-1.3-.3-.8-.5-.6-.8-1.3-1.8-4.3-1.4-2.4v-1h.3l1.4-.3.3-.7-.2-.7-.6-.8-.8-.3h-.5l-.4-.9v-.8l-.1-.8-.4-.3-.3-.5-.1-.7-.1-.5v-1.1l-.1-.5h-.1l-.2.2-.2-.1-.2-1.4.8-.2.6-.6.4-1 .4-1.2 3.9-2h1.3l3.6 1v-1.2l.1-1 .3-1.4.2-1.3v-.6l-.1-1 .2-.2.6-.4h.1l-.3-2v-2l.6-1.5 2-2 3-2 1.3-.8.6-1.5.4-2 .6-2 1-1 1-.3 1.8.5 1.1.5 2 2.1 1.1.6 5.7.7 1.2.7 2 2.5 1 1 1.3.4z"></path><title>Central Finland</title></g><g class="region"><path d="M97.6 357l.1-.2v-.2h-.2V356.9l.1.1zm-.4 2.7V360l.2.2.2.2h0l-.1-.5-.3-.2zm0-1.4l.3-.4.2.2h0v-1h-.2v.2H97l-.2.5h-.2v.2l.1.2h.4zm1.5 0l-.2-.4h-.1v.3h.1l.2.2zm0-2.1v-.2.3h0v-.1zm-2.7 1.7l-.1-.3h-.2v.1l.3.2h0zm2-2.2v-.2l-.2-.2v.4h.1zm.1 2.6l.1.4h.4l-.2-.3-.1-.3-.1-.1-.2-.5V358.1l.1.2zm-3.3-7v-.1h-.2v.3h.1v-.1zm-12.3 25.5l-.1-.2-.2.2-.1.2.2.1h.2v-.3zm47 18.6l-5.5-6.3-3.2-2.9-1.6-2.3-2.7-5.7-1-1.3-1.1-.8-2-1-.7-.8v-.5l-.3-1.3v-.4l-.7-.6-1.2-1.2-.4-1-.7-2.5-.2-1.2-1.4-1.6-3.6-2-4.1-3-.6.6-.5.7v.7l-.3.3-.6.9-.1.2-.7-.3H96l-.2.6.4.6.6 1.3.3 1.2-.4.6-1.6-.2-.7-.6-.2.2-.2.1h-.5l-.3-.5-.1-.2-.8-.4h-.5l-.3.4-.3 2.4v.9l.2.5v.5l-.2.7v.5l.3.4.8.7-.5.8-.5.5-.5.1-.6-.6-.5.9-.7.3-1.8-.1-.7.2-.3.1-.3.4v.4l.2.2v.1l-.3.3-.2.3-.3.2-1-.5-.3.3-.4.6-1.3 1.4v1.4l.2.3h.5l.3-.2 3.8 3.3 1.1.2.6-.4.6-.7.6-.6 1-.3.8.3.7.4h.5l.6-1.2h.7l2 1.3 3 2.8.4 1.1-.4.3-2.5.5-1.5 1-.7-.3-.2-.7-.2-.8H94l-.3.1-.2.2V386l.2.7V387h0l-.4.3h-.1v.8l-.1.1-.4.3.4.2.7.2h1.3l.5.3v.4l.2 1.5.5.5.4.2.5.6.3 1 .6 4.7.2.9.6 1v.2h-.2l.5 1.3.5 1 .6 1 .7.9.8.6.9.4 4 1 1.6 1.3 2.1 2.4.6.9-.5.4-.4.3-.2.5h1l3.3 1.7 3.9-2h1.3l3.5 1v-1.2l.2-1 .3-1.5.2-1.2-.1-.6v-1l.2-.2.6-.4h.1l-.3-1.9v-2l.6-1.6 2-2 3.2-2-.6-.9zm-42.3-24l.3.3h.2l.1-.3-.1-.2h-.1v-.5l-.1-.2H87.2v.9zm8-7.2l.1.3v-1l-.2-.1H95v.2l.2.6zm-5.4 6.8l-.2-.1h-.2 0l-.2.5.4.2.2-.6zm4.8-7.4l.2.5h.1v-.5l-.2-.1v.2h-.1zm-2.4-.1l-.1-.3-.1.2h.2z"></path><title>Central Ostrobothnia</title></g><g class="region"><path d="M49.6 575.9l-.6.5h.1l.7-.4h.3l.3-.1.2-.3v0h-.5l-.5.3zm-2.5-25.5v0-.7h-.4v.2l.1.4v.8h.2v-.2l.3-.4H47zm-4.6 18.7v.3-.2h.2v-.2h-.2zm4-2.3h.2v-.3h-.2v.3zm3.9 3.6l-.1-.2-.2-.1-.2-.1-.1.2h0v.2h.6zm-6-5.6v-.2l-.2-.3-.3.2H44.2v.1l.2.2zm4-20.7l-.2-.4h-.3l-.1.6v.3l.3.1.2.2.2.2h.2v-.4l.3-.5v-.8l-.3-.2-.1.2v.7h0-.2zm-5.6 16h0l-.1.3V561h.2l.2-.5v-.3h-.3zm3.7 12.3v.2-.4h0v.2zm-2 5.8v-.1h-.3v.2l.2.3.2-.1.1-.3h0-.2zm-.2-19.4l-.3-.7h-1.1l-.5.3-.4.6h.5l.2.3.3.3.3.1.7.1.4.2.2.4h.2l.1-.8.4-.3h.9v-.3h-1.3l-.6-.2zm4.8 1.2l-1 .6-.8 1h.9l.4.2.2.5h-1l-.4.1-.4.3.3.2.2.4.3.2h.2l.2-.1.7-.3h.2l.6.3h.4l.3-.3.2-.4v-.4l-.2-.2H50l.6-.4.2-.3.2-.5-1-.7-1-.2zm4.5-4.2l-.2.1-.1.3V556.5l.8-.3v-.3l-.3-.1h-.2zM52.4 544l-.5 1.2-.2.9.1.5.3-.2.4-.6.2-.5.6-1 .2-.4.1-.7h-.5l-.7.8zm-3.3 12l-.2.8v.6l.3.2H49.8v-.2l.2-.4.2-.3.2-.5-.3-.1h-.4v-.1l.2-.2v-.4h-.4l-.4.6zm2.4-8.9l.2.3h.3v.2l-.1.2v.6l.2.2.2-.3.2-.3-.1-.1v-.5l-.3-.4-.3-.2h-.2v.3zm0 3H51l-.2.2.2.2.3.1.6.4.2-.1v-.2l-.2-.2h-.3l-.2-.3zm3.6-1.4l-.5.2-.3.4-.2.6.2.5.5.5.5.3.7.2.3.1.5.5v.6H57.1l.1-.2.5.2h.9l.4-.2v-.3h-.4l-.4-.3h.2l.8-.5-.3-.5-.3-.2H58l.2-.3-.4-.4-.6-.3-.4-.3.3-.3h.4l.7.3v-.3l-.5-1h-.2l-.2-.2-.2-.2-.1-.4-.2-.4-1-.7-.4-.4h-.4l-.2.3-.1.5-.1.6 1.1 1.3v.3h-.5zm-4.4-2.7v.2h.7v-.7h-.6v.2l-.1.3zm-1 2.7l.2.2.2-.2h.1l.1-.3v-.5h.2v-1l-.1-.2H50l-.1.3V547.3h-.2l-.1.2V548.4h-.1l.1.3zm4.2 1.5l-.5.3h-.2v-.2h-.3l-.1.3v.1h.5l.7-.2.2-.2v-.2l-.3.1zm4.7 4.2l-.1.2h.5l.3-.3v-.3H59l-.4.4zM55 554h-.1l.5.6H55.6l.2-.2v-.2h-.5l-.4-.2zm-2.3-.2h-.2l-.2.2v.2l.2.2h.3l.2-.2h-.2v-.4zm-8.3-21.1l.2-.4-.2-.2-.1-.2v-.1l-.3-.2h-.3l-.2.2v.3l.2.2.1.2.2.3.4-.1zM43 529v0l.3.4h.2v-.4l-.1-.2-.4.2zm.4 16.2l-.4-1.3v-.5l-.6-1.1-.7-.8H41l.2.8.4.5.1.6-.2 1 .4.4h.8l.5.4zm-.6-13.5v0-.4l-.4-.1h-.1V531.5l.4.3h.1zm2 23.4l.1.2 1-.1.4-.2v-.7h-.6v.1l-.8.2-.1.1v.4zm-1-3.8h.4v-.2l-.1-.6-.4-.6-.4-.4H43v.4l-.2.2v.4l.2.3.4-.2.2.1v.5h.2zm-.1-31v.2-.2h0zm1.9 28.7l.2.1h.2l.1-.2v-.4l-.2-.5-.1-.2-.1.1-.4.5v0H45.5v.6zm1.2-6l.1.2h.2l-.4-.7-1.2-.2-.4-.8h-1l-.4.2-.2.6v.9l.2.3.2-.2.3-.5.3 1.2.5.9.6.5.6.4-.3-.5v-.4l.3-.2h.4l-.2-.3v-.8l.4-.5zm-1.5 7.6v-1.4l-.6-.4h-.3l-.1.3v.3l.2.5.8.7zm-2.1-21.8V528.3h-.3v.4H42.5v0l.1.3h.2v0h.2v-.1zm-1.1 2.7H41.7v.4h.6v-.3l-.3-.1zm.1-2.5l-.5.3-.1.1v.2l.2.2h.3l.2-.2.2-.1v-.1l-.2-.3h0zm-2.3 1.5l-.4-.6V529.7v.1l-.2.1h-.1v.3l.2.4.6.3h.2v-.4l-.3.1zm.7-2.7v0h.1l1 .6.3.1.1-.4v-.6l-.2-.1-.1.3h-.2v-.1H41V527l-.4-.2-.4.1v.2l.2.3.1.1v.3zm-3 33.2v.6h.2l.2-.1v-.3l-.1-.3-.3.1zm3.5-12.7v-.5l-.1-.1h-.1l-.1.3V548.4h-.2V549l.1.3h.1V549h.2v.1h.2v-.3l-.1-.4zm-1.6 2.8l-.2.4v.4h.2v-.5 0h.2v-.3h-.2zm-3-23.4H36l.1.1.5.4h.1v-.1l-.3-.4zm4.5 11l.2.8.2.3.3.2.5.1.1.3v.4l.2.4h.4v-.4h-.4v-.5l.1-.7.2-.7-.2-.2-.2-.3v-.8l-.3-.2-.2.2v.3l-.2.4-.6.3-.1.2zm2.4-4.7l-.3-.2h-.3v.1l-.2.2.1.1.2.1h.6v-.3zm-3-13.2v-.4l-.2.1H40v.3h.3zm-4 12.4l-.3.3v.2l.1.2h.2v-.4l.2-.3v-.2l-.2.2zm5-7.2h1l.5.2h.5l.2-.5v-1l.3-.3.4-.1.4-.5-.9-.8-.3-.5-.4-.7h-.5l-.3.2-.7.8h.5l.5.3.7 1-.2.1-.2.4-.1.1v.7l-.5.3-1.2-.5-.6.5.3.3h.6zm27.3 48.6v-.1h-.2l-.1.2-.3.1v.3l.6.2v-.6h0zm-.3-3v0l-.2-.2H68l-.3.3-.1.4.1.2.4-.4.3-.2zM65 556.7l-.6.9-.3.9.6.9.8-.5.7-1.2-.1-1.1-.7-.4-.4.5zm2.9 13.8v-.5l-.4-.2h-.3v.1l-.2.6v.3l.2.3h0l.6-.6h.1zm2.3.3h-.1v.8l.4.3v-.5l-.1-.2v-.2l-.2-.2zm.7 3h-.2l-.2.1H70l-.5.3H69.2l-.2.2v.4l.3.2.3-.1 1.5-.8.2-.3v0H71zm-5.4-13.2l-.3.2V561.9l.3-.1.3-.3v-1.1l-.3.1zm-1.3-1H64l-.2.3v.2l.2.2h.1l1-.2.3-.3-1.2-.1zm-.4 14.3h-.3l-.2.3v0h.7v-.3h-.2zm3.3-12.8v-.2l-.4-.3v-.2l.6-.2.5-.4.4-.9-.2-.4-1.5.6-.2.1v.8l-.2.1V561l.2.2h.8zm3.3 12.3V573.9l.6-.5h.4v-.3l.2-.3h-.2l-1 .5zm-3.6 3.4l-.2-.3v-.4.7l-.2.2v.2l.2.1v0h.2l.1-.2V576.7zm2.1-5.4v-.9l.2-.5v-.3.2h0l.2-.2H69.7l.1.2.1-.1V569.1h0-.2v-.3l-.1-.2h-.2v.4l-.2.2v-.2H69l-.1.3v.2h0l-.3.3v0l-.2.5v.6l.2.4.1.2h.2l.1-.2zm10.5-7.2h.7l.3-.1.3-.3h.2V564h.3l.3-.2.1-.4v-.3l-.1-.3-.2-.4-.3-.2h-.5l-.6.2-.3.3-.1.2-.2.4-.2.4-.3.3v.2H79.5zm1 2v-.9l.2-.3-.2-.2h-.7l-.5.3-.2.3.1.2h.3l.2.1v.3h-.6l-.1.6.2.8.3.2.2-.2v-.4l.3-.6.2-.2h.2zm-2.5-.5H78v.3l.1.5.2.1v-.7l-.2-.2zm3.5 0h-.2l-.3.3-.3.3-.1.4v.3l-.1.1h-.2v.3l.1.1h.2l.1.2h.2l.1-.3.2-.2h.2l.2-.1v-.3l.3-.2v-.2l-.2-.5-.2-.2zm-9.5 4l.1-.2.1-.2v-.3l-.3-.1h-.6l-.3.3v1l1-.6zm31.7-30.4l-.3-.2-.3-.4v-.6l.4-.8-3-.1-1.5-.4-1.2-1.4-2-.4-1-.7-.3-.7-.8-1H93l-2.3 1-1 .1-1-.2-.9-.6-1.3-1.1-.3-.8.2-.4.3-.7.5-.5.3-.3v-.5l-1.1-.2-.6-.6v-1.2l.4-.9.8-.2 1.4.1h.3v-.2l-.1-.7v-.2h.4l.3-.3.2-.7v-.5l-.4-.5-.3-.2-.6-.5-1-1.3-.6-.4-.6-.6-.6-.6h-1l-1 .2h-.7l-.2-.2-.6-.6-1.2-.5L79 516h-.3v.6l.2.2v.6l-.2.7-.2.3.2 1.3-.6.8-1 .4-.9.2-3.5-.1-.5.2-.4.6.8.9.1.1-.2.2-7.4 1-.7.4-1 1.3-.5.1-3.4-.6-.4-.5v-.3l-.3-.6-.6-.7-.1-.4v-1.1l-.6-.3-.5-.2-1.4-1.3-.9-.4.3-.6v0l-.2-.2h-.8l-.3.4v.5l-.3.7-.4.2-.7.1-.8-.1-.5-.4-.2-.4v-.6l-.2-.5-.3-.3-.3.2-.2.4V519.7l-.6.4-2 .2-1-.5-.6-1.6h-.3v.2l-.5.1-.5-.2-1-.7h-.6v.6l.3.5.7.5-.2.1-.3.6.4.4 1 2.2.1.4v.3l.2.2.2.1.2.2.1.4.1.6.2.5h-.3l-.2-.3-.2-.2-.2-.2-.2.1-.4.5-.3.1.5.9h.8l.2.2.3.2-.5.5h-.6l-1.2-.2-.3.2.4 1-.2.4V529l.2.3.2.2.3-.2.4.4.1.7-.1.7h.3l.3.2.5.7h-.5l-.3.3.4.4.5.4.5.2h.5v.3h-1.1l.2.6.2.4.1.5-.1.6h-.3l-1.7-.5v.5l.2.7.4.8.5.6.5.2 1.1 1-.2.3H46l-.7-.3.3.7-.2.2h0-.2v.4h.2l.4.5H46.5l.7-.2h1.6l.5.3v.4l-1-.4h-.4l1.2 1.9.4 1-.6.6.5.2h.7l.7-.3.3-.6v-1l.1-.3.1-.4-.2-.7v-.4l.4-.4 1.3-.3.5-.4.5-.6 1.6-1.2-.3.5v.5l.1.5.4.4-.7.2-.2.4v2.4l-.3 1.4-.2.8.5-.3h.6l1 .3-.6-1.2v-.6l.2-.5.4-.1h.7l.7.2.4.2v.4l-.2.6-.1.3h1.1l-.1.6v.1h.2l.2.2h.4v.6l.7.9.4.1.5-.5.4-.7.1.2v.6l.2.4h1l.5.3 1.6 1.2.7.9.3.2h.8l3.7-1-.5 1.3 1.9.1.8-.1 1-1.1.2.4v.7l-.8.5-1.2 1.4-.1.7-.8 1-.4.7-.5.4-.1.2-.1.3v.6l-.2.3H71l.5-.3 1.1-.9.6-.2 1.1-.1-1 .4-.3.3-.4 1v.3l.4.1-1.2 1-.4.4h.7l1.3-.2 3-.9 3.3-3 1.5-.7 1.3.5.3-.9.6-.9.6-.6h.4v.5l-.2.3-.6.6-.2.4-.2.8-.1.4-.4.8-1.5 1.5-.5.6-1.3 2.3.3.3.1.3v.5l-.2.5.3.2.5.6.8.2.4.3.2.5v.8l.2-.2.4-.3.2-.1.1-.3.3-.7.1-.4.5.7-.6.7.1.2 1 .6 1-.3 1.9-1.3 2.4-2.7.3-.3h.4l-.1.3-.1.3.4.4.4.1 1 .1 1-.1 1.2-.6 1.2-1.1.6-.2h.2l1.3.3h.3l.2-.7-.1-.5-.3-.7-.5-.5-.3-.2-.2-.3.4-.1h.4l.1-.6.3-.4 1-.7 1-1 .1-1.2.3-1.3.5-.2.5-.8.2-1.3v-.7l-.4-.7-1.8-.1.4-1.2.6-.5 2.5-.7.3-.5v-.8l-.2-.6.1-.7.3-.2.5-.5.3-.8.2-.5-.2-.5zM72 572.6v.3l.2-.3.1-.1v-.1H72v.2zm.6-2.4l-.3.4.5-.2.2-.3h-.2l-.2.1zm1-.7l.6.3h.2v-.2l-.4-.9-.3-.2h0l-.3.5v.4h.2zm.6.6H74v0-.2l-.3-.1h-.4l-.2.1.9 1 .4.1v-.2l-.1-.2v-.1h.2v-.2l-.3-.2zm2.4-4h-.2v-.3l2-1.7.7-1.3-.3-1.5V560.7l-.3-.3h-.1.1l.1-.2.1-.1h.2l-.1-.6v-.9l.7-.3.2-.3v-.5l.2-.5.5-.5.6-.5.5-.6.1-1-.8-.3-.7.6-.6 1-.5 1-.7.7-4.5.8-.5.2-.8.6-2.3.5-.4-.3.1-.5.5-1.2-.7.2-.3 1-.2 1.3-.2 1 4.3.4v.3h-2.3l-.5.2-.9.6-.5.2.3.5.7.3.2.3v1.5l.1.6-.1.5V568.2l.4-.2 1-.3.4-.6.8-.8.3-.4-.1.7-.2.4-.2.3.1.6.3-.3.2.1v1.1h.2v-.7h.1l.8-1 .2-.5.3.7.3 1 .3-.4.3-.1h.6v-.1l.4-.8.2-.3-.3-.3v-.2zm-8.2 2.2l.1-.5.4-.2h.4l.2.5h.2V565l-.4-.7-.4-.2-.2.5.1 1h-.5v-1.1l-.3-.2-.4.2-.2.6v.7l.1.7.2.6.3.7.2.6h.2zM56 560.7l-.4-.6-.1-.1.2-.2h.7v-.4l-.8-.7h-1.2l-1.3.3-.5.4-.3.5-.1.5.4.3v.3h-.1l-.4.2.1.6v.2l-.2.2.6.4h.8l.7-.4.5-.6-.1-.2h-.1.2l.3-.1.2-.2-.8-.3 1.7-.1zm.3-.2h-.1l-.2.2-.6.2-.2.4v.1l.1.2h1.1l.3-.2v-.3h-.3v0l.1-.1h.4l.1-.1-.1-.3h-.6zm1.6 14h.2v-.3H58v.2zm-4-3.3v.5l.2.3v.1h.2l.1-.2v-.6H54zm4.2-16.4l.4-1v-.4h-2.2v.3l.1.8h.3l.3.4.4.1h.4l.3-.2zm-5.8-2.9v-.2l-.1-.2-.3-.1-.3-.4-.6-.2h-.2v.3l.2.3v.3l.2.1h.4l.6.2h.1zm-1.5 2l-.2.1-.2.5v0l.3.2h.6v-.2l-.3-.4-.2-.2zm3.3 16l-.2-.2h-.5v.4h0v.1l-.1.2v.1l.2.2.2-.1.4-.4v-.2zM51 558.8l-.2-.2h-1v.3l.2.2.4.3h1V559l-.4-.3zm8 3.2h-.4l-.3-.4-.3.1-.3.2-.2.3.2.4.2.2h1.4l.2-.4-.3-.3-.2-.1zm-6.5-6v-.3H52v.3h.5zm8.2 1.4l.4-.5.1-.1v-.4l-.3-.2h-.2l-.5.3v.2l.4.6h.1zm7.9-6h-.7l-.5.2-.5.5-.4.8.9.3h.4l.4-.3-.2.7v.3l-.2.3h.6l.7-.2.7-.5.6-.5-.2-.5-.3-.1h-.7l-.6-.4V551.3zm-5.8 0l.3.4.5.1h.3l2-.8.3-.4-.4-.4H65l-2 .6-.3.2v.3zm-.2-1.3h-.2l-.4.3-.4.9h.2l2.2-1.1v-.3l-1.4.2zm5 18l-.3.5v.8l.1.2h.3v-.3l.2-.6V568h-.3zm-18.8-14.4l-.2.2H48v.1l-.2.2v.1l.2.2h1.2v-.3l-.2-.3-.4-.2zm13.7 1.2l.3-.2h.6l.5.3.3.5-.2.7h.4l1-.3h.1l.3-.3.1-.1.2-.2h.2l.1.3h.2l.5-.2.1-.2v-.6l-.4-.5-1.7-.7-2.7-.2-.6.1-.6.6-.1.8v.7h.2l.5-.1.7.4.6.2.4-1h-1zm4.5 2.4l-.6.6v.3l.4.2.2-.2.2-.1.1-.2v-.2H67.5l.2-.2v-.2l-.2-.1H67zm-7.4 2.8h-.2l1.5-1.4-.3-.6H60l-.3.3-.7.7-1.1.4-.3.2.3 1.3.7.7.7-.1.6-.9v-.1l-.4-.5zm1.4 14.4h-.2v.1h.4l.1-.1.2-.2H61l-.2.2zm1.2-15.6l-.2.1v.5l-.4.2-.2.3h.1l1-.5.2-.6-.2-.1H62zm-.1 1.6l-.3.2-.1.5v.2h.5v-.8l-.1-.1z"></path><title>Finland Proper</title></g><g class="region"><path d="M234.3 286l5.7-.2h0l-.1.3v0l-.2 2.1.3 5-.3 2-2.4 3.4-.8 1.9 1 1.1 3.3-.1 1.6.7.1 2.1-.2.5-.3.3-.2.4v.6l.3.5h.4l.3.3-.1.7-.6.8-3.6.9-1 .8-.6 1.6-.2 2.4 1 4.6 1.5 3.8 2 2.4 2.2.6h4.4l.9.5.4.4v.4l-.1.4-.1.5v.7l-.1.3v.3l.3.7.3.4.9 1 .4 1.1-.2 1-.5 1-.5.6-4 2-.2.2v.5h.2v1.1l.2.5.1.5v.6l.3.1v.5l1 .7.8 1.1-.1 1.3-.6 1.4-.2 1.4.5 1 1 .9 1.6 1 3.7 1.3 1.1 1 .7 1 .6 1 .5.7 1.4.3.7.5.5.8-.1 1.2-.5 1v1l.3.8.4 1 .6 2.3-.1 1.8-.7 1.6-1 1.6-4.2 5-1.5 3.6-1.5 2-3.5 1.5-1.3.9h0l-.3-.3-1.3.2-3.4 1.8H240.6l-.3-.5-.2-.4-1.1-6.7-.4-.6-.4-.2-16.8 1.7-8.5-2.2h-1.3l-1.2.6v1l-.2.6-.4.9-2 3.7-.3 1-.4 1.1-.4 1-.5.6-.6.3-.4-.4-.4-.7-1.8-1.2-1.6-2.8-.8-.7-1-.5-6-5.9-2.5-.8-2.1-1.5-.7-.3-.6.1h0v.2l-.1.2-.7.2H186.3l-.6-1-.5-.5-12.1-3.3-1.6-1.3-.3-1-.3-2.2-.1-6.8-.3-1-.9-.2-.5-.2-.2-.1-.2-.5.1-1.4-.3-.5H166.6l-.8-.1-.7-.4-1-1-.3-.3v-1.3l-.2-1.1-1.2-2-2.3-2-.5-.7.5-.4.2-.3v-.4h0-.1l.7-.4.3-.3 1.6-1.7.7-.3 1.7-.5.4-.2h0l-.3-.2v-.2l.2-.2.3-.1.4-.7.2-.8.4-.4h.5l.2-.2.3-.5V333l3-.3.8-.3 1.5-1.8.4-.3.4-.5V328.4h-.3 0l.3-1.1.6-.8 1.4-1.5 2.9-1.8h1.5l2.7.7h1l.5-.2.5-.9-.3-.2.5-.5V321l-.1-.6.1-1.2.2-.8.1-.5v-.5l-.3-.4h-.1v-.2l.2-.5-.3-.7-1.1-1.5-1.2-1.4V311l.6-1.1 1.3-1 9.4-1.2 2.2 1 .6-.1.4-.8.3-1.2.3-1.3.3-1.4.9-2 1-1 1.3-.6 11.1-2.5 1.5-.6v-1l-.2-.1-.8-.2h.2l.4-.3.5-.9.7-1.4.2-.5v-.1l-.2-.4h0l.7-.7 6.3-2.9 4-.4 1.8-1.1 1.2-2.7.8-.1 1.6.5 1.7.9 1.5.4z"></path><title>Kainuu</title></g><g class="region"><path d="M176.8 548.6h-.2v.2l.1.5.4.8.3.1H177.7l.2-1.2-.3-.1-.8-.3zm-10-1.6h-.2l-.2.2-.1.3v.3l-.2.3-.3.2-1 .3-.2.4.4.8.3.4h.2l.3-1 .3-.3 1.5-.5.3-.3v-.2l-.2-.3-.9-.6zm4.3 4l-.2-.2-.4-.3-.4.4.4.6.3.3h.2v-.1h0v-.7zm28.5-14.3l-.3-.1h-.2l-.6-.1V535.9l-1.3-.9-.4-.4-.2-.5-.3-1.3-.3-.5-1-.3-1 .1-.8-.2-.3-.6-.7-1H188l-.7-.5-.6-.7-1.2-1.7-.7-.7-3-1.3-.8-.5-1.6-1.8-.3-.6v-.2h.4l.3.2.8.2.7-.1.4-.3v-.4l-.3-.2-.2-.4-.1-.4-.3-.4-.3-.1-.8-.2-.2-.1-.1-.2.4-.7-.2-.6v-.7l.3-.9.9-.7.3-.1.3-.4-.3-.3h-.7v-.4l.5-1 .2-.5v-.9l-5 .5-1.3-1-.4-.6v-1.2l-.1-.8-.2-.7-.3-.4-.3-.6v-.5l-.3-.6h-.7l-.6.2-.4.3-.3.3-.3 1-.2.3-.7.7-.8.5-.8.3-.4-.1-.2-.5.1-.2.5-1.1v-.4l-.3-.3-.2-.5-.2-.5-.5-.2-2.3.7-1.2.3-.5.4-.2.2-.4 1.7-.5 1-2.2 2.1-2.4 1h-.7l-1-.8-1 .7-.5.8-.2.6.1.9.2.1.4.3.3.3.3.4.1.4.1.6.2.5.1.2.2.3-.5 1.6-.1.3-.4.2-1-.2h-.2v1.4l.8.8 1.5.5.4.4-.2.4-.4.7-.2.6v.4l-.1.4h-.2l-.4.3-.2.4v.7l.2.4 1.5.2.5.5.4.8.3 1 .2 1.1.4.1h1.3l.3.4.4 1 .2.3v1.4l.5.8 1.6 1 .8.7.5 1 .6.7 1 .2.3.2.9-1.8.5-.7 1-.4 1 .6.7 1.3.5 1.8-2-1.6-1-.1-1 .9-.3.5v1.4l-.1.3-.6 1.4-.5.4-.6.4-.4.5.2 1 .5.6.6.7.6.3.5-.2v-.5l.4-.2h.9l.4.5.4.6.4.5h.4l.2-.3.5-.4.1-.2v-1.1l.1-.3.4-.4.4-.3.5-.2h.4l-.2.7-.1.3-.2.3h.7l2.1-.8.3.4.7.8.2.1v-.5l-.2-.5-.6-.8 1 .1.5-.2.4-1 .2-.3.1-.2v-.8l.1-.3.3-.2h.2l.2.2.4.7.2.1.2-.1.2-.7.2-.2.3.2.3.7.3.1H180.3v.7l.5-.5v-.7l-.4-.7-.1-.7.3-.6.5-.3.4.3-.4 1 1.7 1 .5.5-1.2-.1-.6.1v.7l.4.2 1.8.1 1 .4 2 1.6 1.2.3v-.4l-.3-.2-.2-.2-.3-.2.2-.2.2-.4.1-.1-.1-.4-.1-.2h-.3l.9-.4 2 1.8.8.3-.2-.6-.2-.4v-.4l.2-.6.3-.4h.5l1 .1-.4.4-.7.4-.3.5 1.6.3.3-.1.9-.9h-.2l-.3-.2h.1l.4-.3-.3-.5-.2-.7v-.5l.4-.2-.1-.2-.1-.4-.1-.1.5-.3.4.3.3.6.4.4 2-2.5 2-2.1.6-.7h0zm-16.4 17.8l-.1.2.3.3.2-.5h-.4z"></path><title>Kymenlaakso</title></g><g class="region"><path d="M239.7 150l-1.5-1.8-4-8.6-.8-1.9-2-4-.7-1-.7-.7-6.7-2.8-6.7-2.9-.8-.6-.7-1.3-4.2-16.5-.5-1.8-.3-1.6v-1l.3-.7 6-12 .7-2 1.3-5-1.7-1.8-2-.5-4.7.4-.5-.3-.3-.6v-1.2l1.1-.1 6-4.5 2.8-1 2.8-2.8-2.8-3.5-.2-.7v-1l.4-5 .1-1.4.3-.9 8.6-10.6 2.7-5.8-3.3-8.2-1.3-5.2-.4-.7-7.6-3.8-7.6-3.8-1-.4-.8-.7-.6-1.4V16l-4.5-2-.5-.5-4.4-8-1.2-3-.7-1.2-.7-.3-1.8 1.1-3-.6-1.2.4-1 1.5-.1 1.1-2.8 1.4-1.6 2-.3.2h-.4l-.4.2-.2.6.1.1.4.5.2.1-1 1.4-5 1.8h-.4l-1.7-1.3h-.6l-.7.2-1.3-1-.8-.2-2.1.7-1.6-.5-4 .7-.8.4-.5 1.3-.8 1.2-.2.6.2 1.2-.6 1.4-2.3 2.7-1.1 2.5-1 1.7-.4.7-.2.5-.4.2-3.5 1-.7.5-.5 1-.3.8-.2.7v.7l.4.6.6 1.6v1.6l-.4 1.4-.7 1.1-1.3 1.2-.4.7.1.4.3.4.1.5-.3.7-.2.8v1.6l-.2.5-.1.4-.6 1.6.7 2.6.1.5-2.1 3.9-.3 1-.9 5.3v1.7l.4 1.7.1.4.3 1.2V65l-.1.3V68.3l-.2.6v.4l.3 1V71.2l.2.3.4.5.2.3.1.5-.2.8-1 1-.3.8v.9l-.3.6-.8 1.1-.3.9-.3 1-.4.9-.5.6-.6.1-2.9-1-1 .3-1.2.6-4.5 4-.9 1.8-.3 1.3v4.4l-.2.5-.1.4v.4l.3.5-.3 1.3-.4.7-.4.2-.7.2-1.5 1h-.6l-.6.7-.4 1-.2 1.2-.5.9-.6.1-.5-.5-.7-2-1.8-2.8-2-1.8-4.3-1.5-3.5-1.3-3.4-2.3-.6-.7-.7-1.3-4.8-2.6h-1.8l-1.6 1-.4 2.9-.8 2.6-2.2 1.3-3.7.6L87 98l-.5-.3-1.8-3.1-.6-.7-1.2-.4-4 .7-6-3.2-.6-.1h-.6l-2.7 1-.4-.2-.3-1.2-.6-5.9-.4-.6-1.8-1.6-1.8-3.3-.3-.7-.3-1.6-.3-.8-3.2-3.6-1.8-3.6-6.7-13-.5-.5L43 54l-5 3.4-.4.6-.4 1-.7 2.3 2.9 6.1-1.4 2.9-.6.4-1-.2-6.6-4.2-.7.4-2.2 4 1.3 1.2 2.8.5 1.5 1.6 1.1.4.6.9v1.1l-.4 1-.7.5v1.3l.4.8 4 1.6 1.8 1.8 1.5 1.5 1.4 2.7.3.4.1.1.2.6v.2l.3.1h1.7l.4.4.3.6.1.8.7 2 .3.6.7.7 1.8.5 2.1 2.2 1.3 1 .5 2 4.3 1.2 1 1.4.1.4.7 1 .3.5.3.4h.1l.2.2v1.2l.8.7h5.4l1.6.5v.7l.2.2 1.8.1 1.5.9 1 .1 1 .7h1.3l.7.6.6 1.1.7.9 1.4-.6.6.6 1 2.2.6.9 3.5 2.4.4.5.1.6v.5l.1.5.4.6 1 1.4.4 1-.2 1.5.2.5v2.1l-.2.5V129h.1l.2.4h.5l2-1.5h.8l.3.5.2.7 1 3.7v.5l.3.6 1.7 1.6.6.6 2.1 2.6 1.6.7.4.8v1l-.5 1.3-.8.6-1.6.6-.8.7-.4 1.1-.1 1.5v1.5l.1 1.3v3.6l.1.8.3 1 .2 2.4.2 1 .6 1.6.2 1v1.4l-.4.7-.8.6-.6.7.2.7-.4 1.3-.5 1.1-.3 1.2.3 1.5.7 1h1l.8-.4 1-.1 1.6 1 1.6.3.5.3.3.4v1.4l-.3 1.7v1.4l.8.6-.3 1.8-.6 1-2.7 1.3-.4.5-.2 1v1.6l.5.2-.2.8-.2.7-.2.5-.3.5.1 1.2.5.8.5.7.6 1.2.2.3.2.3.1.7v1.3l.1.4.2.6.9 2 .5.9.4.4.7.3.6.8 1.3 3 1 1.3.4.9.7 1.6 1 3v.3l-.2.6-.4.2h-.5l-.5.1-.3 1-.8 1.4v.4l.2 2.2v2.4l-.3 1-.2 1 .2 1v2.1l-.1 1-.5.5-1.3.9v.6l-.5.6-.7.4-.6.5v1l-.5.2-.7.5-.6.9-.2 1.3v.7l.5 1.1.1.6v.8l.2 1v.9l-.1.6-.2.7V239.4l.3 1.3.2 1.5.8 3 .6.9.9.7 2.4 1 .5.7 1.4 3.8.2.5.3.4.5.6.3.4.2.8.6 2.9v2.1l.5 1.2.6 1.1.5 2.3 1 1.6v1.4l.2.6.3.8.5.7.4.2.4-.3.2-.8v-.8l-.3-.8 1 .8.8.4.3.2.7 1 1 .6h.3l.2-.4v-.7l.5-.4h1.6l.8.5-.2 1.4v1.1l.4.8.4.8.3.4 1.4.9.2.2v2.6l.1.5.3.3.5-.1.3-.3.6-.8.8-.4 1-.2.8.2.9.4.2.3.5 1 .3.3h.4l1.1-.2.5.4.3.4.6-.2.3.2.2.5.2.5v.2l.7-.8 1.6-2.4 4.5-5 2.8-1 6 .4 2.6-.7 6-3.2.8.3-.1 2.3v1.6l.1 1 .6.3 15.3.8 6-2.6 1.6-2 5.4-9 .8-.5 2.4 1.4h.4l.5-.3-.1-.2.7-1 .9-.1 1 1.7 1 2.6.5 1.2.6.9-.1.6v.1l10 1.4 1-.2 2.2-1 2.2-.1 1-.6.9-1.2.2-.9-.4-1.6-2-2.7-.4-.5-.4-.7h.4l.3-.1V257h.4l.2.1v0l-.1.4v.1l.5.2h.6l2-.6 3 .4 1.1-.4.4-.4.4-.9v-1.3h-.7l-.7-.5-1.5-1.2v-.1l.2-.5v-.3l-.3-.2-.2-.5-.3-1 .3-.4h1.1l.7-.4.3-.3.2-.8v-.4l.3-.6.7-.7v-.5l-.6-.6V245l.5-1.4v-.3H216.9V242.6l-.3-.4h-.3l-.6.1-.8.4h-.3v0-.5 0l-1-.6-.8-1-.6-1.4-.1-2 .2-1.4.4-1 .5-.8.4-.6h1.1l.3-.3.2-.7V231l.2-.9v-.3l1.1-.7 10.2 3.8 1.2.1 2-.7 5.6-.1-.3-2.5-.2-1-2.7-4.5-.2-.5-.1-.6V222l-.7-1.1v-.2l-1-3.1-5.4-9.4-.8-4.2 1-5 7.8-14.5 1.2-1.5.2-.4.2-.4.2-1 .3-.7 9.3-12.8.4-1.1.6-2.8.1-.8.2-4 .1-.8.2-.6.6-.8-6.8-6.7z"></path><title>Lapland</title></g><g class="region"><path d="M221.4 376.5l16.8-1.7.4.2.4.6 1.1 6.7.2.4.3.5H241.2l3.4-1.8 1.3-.2.3.3h0l-.4.3.5 1.4 5.7 7 3.2 2.6 1.4 2.2.5 1 .6.5 7.8 4.5 3.6 4.6 4.7 3.3.6.6.6.9.1 1v1l.2 1.1.2 1 .3.9.6.8 1.5 1.1.7.8 1.5 2.3.5.6.3.3.6.9.3 1.3.4 1.2.8.7-2 4.1-1 2-.7 2-1.1 5-.4 1-1 1.8-.5 1.1-.5 2.5-.4 1-.5.7h0l-1.3.8-.3.4-.3.5-.4 1.1-3.4 3.9-.3.5-.6 1.7-.4.6-.4.5-2.6 2-2.2 2.2-.8.5-.5.3-.3.5-.6 1.6-3 4.2-3.3 3.8-4.5 7h0l-2 .1L236 485l2-3 1-2v-.9l-.5-.3.5-.9-.2-.4-1.4-1.5-.2-.9.1-.6.3-.8.5-1-.5-.8-.7-.5-1.4-1.4-1.2-1.8-.8-1.8-.4-1.3-.4-1.8-.2-2 .1-1-.1-1.3-.5-.5-.9-1.4-.4-.8-.6-1.7-.7-2.5-.8-1.4-1-.4-.5.4-.5 1v.2h-.5l-.7-.3-.2-.2v-.2l.1-.7v-.1l-.3-.1-.2-.1h0V449l.3-1 .2-.7.2-.3-.2-.4-2-1-.2-.2.6-.5-.2-.3-1-.7-.6-.7-.1-.4-.6-.7-.4-.3-2-2-.5-.3-3.5-1.2.2-.8.3-.6.2-.2.3-.4-1.3-2.6.6-1.2 1.3-.7.4-.6.6-1.7.6-.1 1 .6 1 1.1 1 .7.8-.4 2.9-2.5.2-.6-1.2-.7-.7-.7-.5-1-.7-.6-.4-.5-.2-.5.2-.4.2.2.3.2h.7v-.3h0l-.4-.5-.1-.1.1-.5.3-.3 1.4-.8.2-.3-.1-.9-4-3.2-3.8-5.4-1-1.1-.8-.5-.5-.7.9-1.4v-.3l-.2-.2v-.3l1.3-1 .1-.3h0l-.2-.4v-.3l.8-1 .3-.7.1-.7V402l.1-.4.1-.5-.2-.7-1-.9-.7-.7-.4-.9-.3-1-.3-1.3-.3-1.2-.2-.5v-1l.1-.4.5-.3h.5l.3-.2-.4-.6-.6-.6-.4-1.2-.2-1.4-.4-1.8.3-.8.1-.1-.3-.5-.4-.3-.6-.2-2-.3-.5-.4-1.3-1.9-.7-.6 2-3.8.3-1 .1-.5v-1l1.3-.6h1.3l8.5 2.2z"></path><title>North Karelia</title></g><g class="region"><path d="M116.5 330l-.1-.3-.3.2v.3h.4v-.2zm-1.4-.6l-.1-.1v.2l.1-.1zm-.2 1.4h0l-.2.1h.2zm7.2-9.6v.3l.2-.1.2-.4v-.2l-.3.4h-.1zm7-30.8v.2l.1.1.2-.2h.1l.2-.2v-.1l-.1-.2-.4-.3v.2l.1.2-.2.3zm-1.6 9.7v-.2l-.2-.1v.3h.2zm-3.6 16.9l-.1.2-.2.3v.2l.4.1.2-.2v-.3l-.1-.3h-.2zm-9 16.4h0v-.4l-.2.2.2.2zm10.2-41.1v.1h.2l.1-.2.3-.3v-.3h-.7v.4l.1.3zm-5.6 20.6l.4 1 .8 1.3.6-.2.6-1.4.3.5.3.6v.2l-.2.8.3.4h.5l.4-.1.2-.2.3-.4.2-.2h.8l.3-.3-.4-.3-1.4.2-.7-1.6 1.9-1.2.4-1 1.3-.1 2 .5h1.6l.8-.4-.6-.8-1 .1-1.3-.2H126.6l-.2-.4.6-.3-.4-.8-1.1-.5-2.2.6-2 .2-1.6 1.7-.5.7.1.8.2.8zm-4 18.5v-.4H115.2v.5l.3-.1zm21.7-22.8l.2-.3V308l-.1-.2h-.4l-.3.1v.7l.4.4.2-.4zm-3.5-1.5l-.2-.1h-.6v.3l-.1.1-.2.4h.2l.2-.3.1-.2h.2l.2.1.2-.1h.3l-.2-.2h-.1zm2.4 6.2h-.1v.1h.5l.2.3.2-.2h-.1l-.3-.1h-.4zm-24 27.5v-.2H111.9v.2h.4zm23.2-45.6h.2l.4-.3.2.2v-.3l-.2-.2h-.6l-.3.3h.2l.1.3zm1.8-5l.1-.2v-.3h0v-.2h-.2v.3h.1v.3zm-4.7 15.9h.1v-.3l-.1-.2-.1.1-.1.3v.2l.2-.1zm116.3-32.6l-.7-5.3-.2-1-.8-2.5-.7-3-.3-.8-1-2.5-.2-1-.6-4.4-.5-2.3-.6-1.5-2-2.7-3.2-6.2-1.4-3.4-.5-1.9-.4-2-.2-1.1-5.6.1-2 .7h-1.2l-10.1-3.9-1 .7-.2.3v.9l-.2 1.5-.1.7-.3.2h-.8l-.3.1-.5.6-.4.8-.4 1-.3 1.4.1 2 .6 1.4 1 1 .8.5v.5h.3l.9-.3H216.6l.3.2v.6H217.1v.4l-.5 1.3-.1.3v.3h.1l.5.7v.4l-.6.8-.3.6v.4l-.2.8-.3.3-.7.3-1.2.1-.2.4.3 1 .2.4.2.3.1.3-.2.4v.1l1.5 1.3.7.4h.7v1.4l-.4.9-.4.4-1.1.3-3-.4-2 .6h-.6l-.5-.1v-.5.2-.1h-.6v.4l.1.8v.4l-.3.1-.2.2.5.7.4.5 2 2.7.4 1.6-.2 1-.9 1-1 .6-2.2.3-2.2 1h-1l-10-1.3v-.7l-.6-1-.5-1.1-.9-2.6-1-1.7-.9.1-.7 1v.2l-.4.3h-.4l-2.4-1.4-.8.6-5.3 9-1.6 1.9-6.1 2.5-15.3-.7-.5-.4-.2-1v-1.5l.1-2.3-.8-.3-5.9 3.2-2.6.7-6-.4-2.8 1-4.7 4.8-1.5 2.4-.7.8v.4l.2.4.5 1h.5l.6-.1h.6l.5.3 1.7 1.8.7 1 .7 1.3.2 1-.4 2.1.3 1-.2.3-.4.9-.2.3-.4.1h-.6l-.3.2 1.6 2-.3.5-.2.1h-.2l.1.2.2.4v.2l-.3.8-.3 1.7-.3.6h.4l.4.4-.1.3-.2.8h.1l.3.3h.2l-.3.3-.2.2h-.6l.1.8v.8l-.2.6-.3.4-.8.9-.2.6-.1 1.2 2.6.8.7.7.2.4.2.3v1.1l.2.5.3.5.5.7v.8l.2.3-.2.9.2.5.3.5.2.7-.2.8-.4.2-.5-.1-.5-.5-.9-1-.4-.3-2.3-.4-.4.2.1.4v.1l-.3.5-.2.1.8 1.6.4.6 1 .3.5.8.4.2.3-.1.3-.3h.3l.2.7v.4l-.3 1.7v.5l.2 1-.1.2-2.3.7-.8-.3.4-.3H135.3v-.4l-.5-.1-.4-.3-.4-.4-.3-.6-.1-.3-.1-.8v-.2l-.3-.2h-.1l-.2.2h-.2l-.3-.5-.2-.6-.2-.5-.4-.3-.5.2-4.2 2.3-2.8.4-.9.6-.1 1h-1l-.4.4-.2.9v.3l.2.4v.3l-.2.3h-.2l-1.9-1h-.5l-.4.1.3.5.9.9-.8.5-.3.4-.2.6v.5l.3.6-.4.8-.4.5-1 .6-.7 1h-.2l-.2.2-.1.5v.4l-.2.5-.6 1.2-.2.6-.2 1.1v.1l.1.4v.5l-.4.4v1.3l-.3 1-.5.3-.3.2-.4.3-.1.3-.2.7-.1.4-.3.2-.6-.2-.3.2-.2.3v1.5h-1l-.9.7v-.1l-.3.4-.2.2h-.6l.1.9-.4.5-1 .4-.5.5-.2.5-.2 1.6-.3.8-.7 1-.3.8-.1.8v.8l.1.7.2.6-.4-.4-1-.6-.5-.1-.4 1.7-.2.5-.4.3-1 .7h-.4l-.5-.4-.3.4v1.6h0l-.3.6 4 3 3.7 1.8 1.3 1.6.2 1.3.6 2.4.4 1 1.2 1.3.7.5v.4l.3 1.4v.4l.6.9 2 1 1.2.8 1 1.2 2.7 5.8 1.6 2.2 3.1 2.9 5.4 6.3.7 1.4 1.2-.7.6-1.6.4-2 .7-1.9.9-1.1 1-.2 1.8.4 1.1.6 2 2 1.1.6 5.7.8 1.2.7 1.9 2.4 1 1 1.4.4 1.4-.2 2.5-1.1.7-1.3.2-.6.1-.6.3-1.9.1-.7.5-1 .6-.4 1-.5v-1.8l-.8-8.4-.4-1.3 1.5-2.5 9.2-8 4.2-1.5-1.6-1.4-.4-1-.2-2.2-.1-6.8-.3-1-1-.2-.4-.2-.2-.1-.2-.4.1-1.5-.3-.4H166.5l-.9-.1-.6-.4-1-1-.3-.3v-1.3l-.1-1-1.2-2-2.3-2.2-.5-.6.4-.4.2-.3v-.4 0l.7-.4.4-.3 1.5-1.7.7-.3 1.7-.5.4-.2h-.2v-.3l.2-.2h.3l.4-.8.2-.7.4-.4.5-.1.2-.2.4-.5v-.4l-.2-.4v-.4l3-.3.8-.4 1.5-1.7.3-.5.4-.5V328.1h-.3l.3-1 .5-.8 1.5-1.5 2.9-1.8h1.5l2.7.7h.8l.7-.3.4-.8-.3-.2.5-.5V320l.1-1.2.2-.8.1-.4v-.6l-.4-.3h0v-.2l.2-.5-.3-.7-1.1-1.6-1.2-1.3v-1.8l.5-1.1 1.3-1 9.4-1.2 2.2 1 .6-.1.5-.8.3-1.2.2-1.3.3-1.4.9-2 1-1 1.3-.6 11-2.5 1.5-.6v-1l-.1-.1-.8-.2h.2l.3-.2.6-.9.7-1.4.2-.5v-.2l-.2-.3v-.2l.8-.6 6.3-2.8 3.9-.5 1.9-1 1.1-2.8.9-.1 1.5.5 1.6.9 1.6.4 5.7-.3.3-.8 1.9-2.3.3-.7-.8-1.1-1.7-1.4-.7-1.1 1.4-1.1 5.6-1.7 1.5 1 .7.2.4-.5V273.5zM133.9 308v.1h.2l.2.1h.5v-.9l-.2-.1h-.2l-.3.1-.2.2v.5zm.8-9.5H134v.2l-.1.1.2.2.3-.3.2-.2z"></path><title>Northern Ostrobothnia</title></g><g class="region"><path d="M187 371l.6-.2.2-.2v-.2h-.1.6l.7.2 2.1 1.5 2.4.8 6.2 5.9.9.5.8.7 1.6 2.8 1.8 1.2.4.7.4.4.6-.3.5-.7.4-.9.4-1 .4-1 .7.6 1.3 1.9.6.4 1.9.3.6.2.4.3.3.5v.1l-.4.8.4 1.8.2 1.4.4 1.2.6.6.4.6-.3.2h-.5l-.5.3-.2.4.1 1 .2.5.3 1.2.3 1.2.3 1.1.4.9.7.7 1 .9.2.7v.5l-.1.4v1.2l-.2.7-.3.6-.8 1.1v.3l.1.3h.1l-.1.4-1.2 1-.1.3.2.2v.3l-1 1.4.6.7.7.5 1.1 1.1 3.7 5.4 4.1 3.2.1.9-.2.3-1.4.8-.3.3-.1.5h0l.5.5v.4h-.7l-.3-.2-.2-.2-.2.4.2.5.4.5.7.5.5 1.1.7.7 1.2.7-.2.6-3 2.5-.7.4-1-.7-1-1-1-.7-.6.1-.6 1.7-.4.6-1.3.7-.6 1.2 1.3 2.6-.3.4-.2.2-.3.6-.2.8-.2.7-.3.8-.4.6-.2.2v.1h.5l-.4.5-.5.3-2.3.2-.4.3 1.3.5v.7l-.3.1-.2-.2-2-.4-.3-.5-.2.3.1.2h0l.1.1-.3 1.9-.2.6-.3.3-.2.6.4.7.1.6-.1.6-.6.2-1.7-.7-.2.3.1.3.4.3v.5l-.2.1h-.5l-.3.4-.1.2v.4h.2l.3.4.2.5v.3l.2.5.7.4h0v.7l-.3.4-.8.2h-1.6l-2.8 1.9-.3 1-.2.6-.8.2H199l-.3.2h.5l-.1.5-.3.4-.4-.2-.6-.6-.5-.5-.4.2h-.9l-.2.1-1.7-2-.5-1 .5-1.3-.7-.3-1-.3v0-.5l-.5-.4-3-3-.8-1-.4-.2-.7-.7h-.5v-.2l-.5-.5-.8-.5v-.1l-.9-.2v.1l.3.7-.2.3h-.1l-1 1-.6.2h-.5l-1.3.6h-.4l-.1-.3-.5-.7-.4-.2h-.4l-1.3.6-.8.1-1.1-.4h-.4l-.3.1v.8l.2.5h-.3l-1.7-1h-.4l-.5.4-.3.3-.2.5h.1l.2.2-.3.4-.4.3h-.8l-1.3-1-.6-.5-1.6-.1-.7-.4-2.4-2-.1-.7 2.3-3 .3-.5v-.3h-.2v-.1l.2-.5v-.7l-.2-1.7-.6-1.6-.5-.7-.3-1-.1-.7-.3-.6-.8-1-.8-.6h-.6l-.5.7-.4.6-.4-.2-4.3-3.8-.3-.6.5-.8.1-.1-.5-.5-1.5-1-.8-.9-.4-.7.3-.8 2.8-.9 1.3.2 1 .3h.2l.5-.6.3-.6-.1-.7h-.4l-.7-.5-.6-.8-.3-.4v-1l.2-.2.6-.2 1 .2-.3-.7-.6-.7-1-1.5-.7-1.6-1-1.4v-3.1l.6-.2v-.7l-.4-1.5-.8-3-.5-1.4-.4-.5-.2-.9.3-.6 1.5-2.6.2-.7-.5-.5-.3-.2.7-1.3.2-.5.1-.6.3-2 .2-.7.5-.9.5-.5 1-.5v-1.7l-.8-8.4-.3-1.4 1.4-2.5 9.2-8 4.2-1.6 12 3.3.6.5.6 1H187z"></path><title>Northern Savonia</title></g><g class="region"><path d="M67.8 389.2l.3.2v.4h.2l.2-.2v-.5l-.4-.7-.3-.3h-.3v1l.3.1zM61 404l-.2.1v.3l.3.5.1.5-.1.3-.2.1-.2.1v.3l.3.2.1.2v.3l.2.2 1.1.6h.2v-.2H63l.2-.4-.1-.6-.5-.2-.6-.2v-.1l1-.2.7.7h.5l.4-.3.2-.7.3-.5v-.2l-.2-.4V403.4l-.1-.4h-.2l-.2.3-.1.4v.4l-.1.3-.2.1h0l-.2-.2-.2-.1-.2-.1-.1.1v.3H63l-.3-.3-.2-.3-.2-.2h-.1l-.4-.1-.4.3H61zm8.1-13l.3.6v.5l.2.4.1-.1V391v0h0v-.2l-.5-.5-.1.2v.4zm3.4-10.3v-.5l-.3-.4v.4l.1.2v.2l-.1.2v.4l-.1.2.1.2.3-.9zm.7.6h.3l.2-.5.1-.4.5.2v-.1l-.2-.3-.3-.3h-.5l-.3.2v.8l.2.4zM54.4 397h.1v.6h-.1v.2h.8V397.1l-.2-.3-.2-.2v-.2H54.5h0v.3l-.2.2v.2zm3.8 6.3h.2l.4-.5.3-.4.1-.3.3-.5h.3l.8.3h.4l.2-.4-.1-.4v-.1h.2l.1-.2v-.1H61.1l-.3-.1v-.1h-.5l-.4.2-.4-.1h-.4l-.2.3v.3l-.1.2-.2.2-.1.3-.1.3-.2.2v.9zm1.3 2.8h.4l.4-.2.2-.7v-.4l-.6-1h-.2 0l-.1-.1H59.3v.2l.4.4.1.2h-.2l-.4-.3-.3.2-.3.6v1h.4v-.5l.2-.1v.5l.3.2zm17.6-31.5l-.3.1V375.4l.2.2h.4v-.5l-.1-.3H77zm-3.7 4.7l.1-.2v-.5h.2l.4-.1v-.2l-.1-.1h-.2l-.5-.4v.1H73v.2l.2.7.1.5zm4-6.6v-.5l-.1-.2H77l-.4.2v.2l.8.3zm1 2.6h.4l-.2-.3-.2-.1v.4zM52 404.1l.1.3.4.5.3 1v.2l1 .6v-.2l.1-.3.3-.1v-.3l-.1-.2h-.2v-.4l-.7-.8h0-.5v-.1l-.2-.4-.4-.3v0l-.1.5zm26.4-31.3v-.3l-.2-.2H78v.3l.2.2h.3zM74 378v.2h.2l.2-.1v-.4l-.1-.5-.2-.2H74v1h0zm4 4.4l-.3.3v.2l.1.2.3.2h0v-.1l.2-.2v-.3l-.1-.3H78zm-2.9-1.3l.1.2.3.8.4.5.4.3h.4l.2-.3h.3l.1-.3V381.7l.3.3h.2l.2-.4v-.5l.1-.3v-.4 0h.1l.1-.3-.1-.1h-.4 0l-.2.1h0l-.2-.4-.2-.3H77l-.6.3-.4.4-.2.2-.2.2-.5.4v.2h.2zM42.6 405l.3-.2h.2l.1 1 1-1.5.3-1v-.8l-.7-.7-.8.4-.8.8-.6.3h-.4l-.1.3 1.1 1.4h.4zm-5.4-6.4v.1l.2.3h.3v-.4h.2v-.2h-.2l-.1-.2h-.4v.4h0zm-6.1 16l-.1.3-.1.3v.3l.2-.4.1.3.2-.3-.1-.7-.2.1zm1 7.2l-.1-.1-.2.1v.3h.2v.5h.2v-.2l.2-.2-.1-.1-.2-.3zm19-21.2h.1v.3h.3l.1-.3.3-.1V400.2l-.1-.2h-.3l-.4.1-.3-.1v.2h.3v.4zm-16.6 21.8l.2.3h.1V422.4h-.3zm2.7 13.2h.2l.1-.2.2-.2.2-.4v-.3l-.1-.5-.6-.4-.2.1V435l.1.5.1.2zm56.6-49.8l.3-.1h.1l.2.8.2.7.7.2 1.6-.9 2.4-.5.4-.3-.4-1-3-2.9-2-1.3h-.6l-.7 1.3-.4-.1-.8-.4-.8-.3-1 .3-.6.6-.6.7-.5.4-1.1-.2-3.8-3.3-.3.2h-.6l-.2-.3.3.8v.5l-.3.1-.4-.5-.4-1.2-.3-.4h-.5l-.4.4-.1.6.2.6.4.2.1.2v1.1l-.2.3h-.4l-.6-.4.2.2.5.9h-1.6l1.2.7.4.4-.4.5-.7.5-.4.5v1.2l-.2.4-.2.1h-.2l-.2.2-.3.4-.4.3-.4.2h-.3l-.2-.3-.5-1.2-.2-.4V385l-.3-.6-.4-.4-.2-.2h-.3l-.2.3v.5l-.2.3-.2-.2-.3-.6-.5-.3h0v1.5l-.2 1-.5.2-1-.3v.7l-.2.2-.2.3-.4.7 1 1.8.1.7-1-.7h-.1l-.1.7-.2.3-.3.3-.2.4-.4 1.9-.1.6-.2.5v.4l.1.5v.4l-.3.2-.3.6-.3.2v-1.3l-.4-.4-.6-.1-.5-.3v-.5l.2-.4v-.5l-.4-.3H66l-.2.1-.3.7.2 1.3 1 1.5 1.9 2.2-.9-.6H67l-.7-.3-.7-1-.7-.8h-.7l-.6.6.1 1.5.3.5.3.3.3.2h.4l.1.2 1.2 1.8.7.7.3.5.2.8.2.4.2.3-.5.8-.5 1.1-.5.5-.6-1.4h-.1l-.3.9-.5 1-1 1.3v-.1l-.1-.2H63.5v.5l-.2.2H63l-.7-.4H62l-.3.1-.6.6h-.3l-.3-.4-.2-.4-.2-.3-.5.4-.2.4v.8l-.2.5-.2.5-.2.3-.7.3.4 1 .3 1.2-1.9-1.7-.6-.1.3-.6v-.4l-.2-2v-.5l.2-.8H56l-1.1.8-.5.3-1-.1h-.3l-1 .8v.3l.4.2.7.3.4.2-.5.4-.7-.2-.6-.4-.5-.5-.4 1.1-.8-.3-1.3-1.5-.4.1-.4.3-.5.4-.2.5.1.8.3.4 1 .4v.3h-.8l-.3.2-.1.6h.3v1.6l.3.3.4.1h.3l.3-.2-.5.7.2.7.4.6 1.6 1.5 1 1.4-.7.5-.7-.3-.7-.6-.8-.3-1-1.2-.6-.4-.3.7v.8H47l-.2-.2h-.2l-.3.3-.1.2v2.6l.5 1.8-.9.4-.1.1v.4l-.3 1-.2.7v.7l-.2.4-.2.3-.4.5-.2.3-.5.2-1.6-.7h-.5l-.4.5-.1.7v.7l-.1.9-.2.3-.4.8v.1l-.2.4-.3-.1-.5-.5-.5.2-.3.5-.2.7.2.9.2.3.4.6h.4v.7l-.2.7-.6.7-.6.5-.5.1.1 1-.3 2v1.3l.4-.9.3-.4.2-.1.4.7 1.7.4.4 1-.5-.2-.5.5-.5.6-.5.5.5 1 .2.3-.4.4-.3.5-.3.6v1l.1.9.2.2.3-.1.4-.4-.1 1-.5 1.5v.7l.4-.5.4-.4.5-.1.3.3-.1.2-.2.2-.1.7h.1l.2.1h.1l-.1 1-.1 1v.7l.6.1-.4-.7v-.5l1.6-2.6.2.7-.3.6-.1.7v.6l.2.5.3.2 1.3-.5-.1.8v2.3l-.1.9-.3 1.4-.1.8.4-.5.2-.6.3-.6h.5l-.5 1.8.7.7.2.5-.1.7-.3.4-.8.5-.3.6.1.6v.7l-.3 1.4-.4-1-.2.4-.1 2.4-.2 1.2-1 3.2 1.1.3.4.4-.5 1h.3l.6.5h0l.5-.7.7-.4.5-.8.4-.9.5-.7 1.2-.6 1.2-.2 2.8.3-.1-.3v-.2l-.1-.3h0v-.8l.1-2.9.3-1.6 1-.2v-.6l-.2-.7-.3-.4v-.7l.4-.6.6-.4 1-.3.1-.5-.2-.4-.4-.6-.6-.3h-.4l-.3-.7v-1.6l-.2-.8-.1-.4v-.5l.4-.2v-.6l-.3-.4-.9-.3-1.8.5v-.7l-.1-.2h-.4l-.1-.2.1-.5.2-.3.1-.8v-1.3l.2-1 .7-2 .5-1.7.1-.8v-.8H50l-.1-.3v-1.7l1-.9 1.4-1.2L54 437l.3-1-.3-.4-.5-.8-.2-.5-.3-1.3v-.7l.2-1.7.3-1 .3-.7.2-.6.6-.2 1.9 2.2 1 .7 1.7.9 4.4 1 .8-.1.8-.5 1-1 2-2.9.4-.4.3-1v-1.2l.4-1.5v-.5l.1-.9 1.6-3.6.4-.6.4-.5.5-.1-.2-.3-.1-.3.2-.4.8-.4h.3l.5.2.3-.3.4-1.3v-.7l-.2-.2.2-.5.3-.1.3-.2V411.7l-.3-1-1.5.2-.3.1H73v-.2l.4-1.2v-.2H73l-.3.1v-.1l.3-.5.3-.6v-.4H73l-.5-.2v-.7l.3-.5.7-.7 1.2-.5.3-.2v-.1l-.5-.9.2-.2 2-1.3-.3-.6h.8l2.3.1 1.5.5.6.3.5-.2v-.8l.3-.6h.5l2.5.6 1-.4.9-1.3 1.5-3.2.8-1.2 1.3-.6 1-.1 1.3.1 1.3.5 1 .6.3.6.7 1.4.5.7 1 1 1 .8h.2v-.2l-.5-1-.3-1-.5-4.6-.3-1-.6-.7-.4-.2-.5-.5-.2-1.4v-.4l-.5-.4H94l-.7-.2-.4-.2.4-.3h0V387.7h.1l.4-.3h0V387.2l-.1-.6v-.7h0zm-56.2 56.4h-.1l-.4.6v0h.1l-.2.4v.8h.2v.2l.5.3v-.7l.2-.8v-.5l-.1-.3h-.2zm-9.8-34l.1-.1.3-.1v-.3l-.4.2v.3zm13.7 13.2l.1-.2v-.3l-.1-.2h-.1l-.1-.1v-.3l-.1-.2H40.9l-.2-.5v-.3l-.2-.1h0v1.5h.7l.2.5.2.2h0zm9.1-15.6v1l.3.3.5.3h.1v-2.1l.4-.2v-.4l-.2-.5v-.2h-.3v.1l-.2-.1-.1.1-.1.2-.1.1h-.2l.2.1V404.8l-.2.2v0l.1.2-.2.3v.3zm-12.3 23.6v0l.4-.3h.1v.1l.1.1 1.5-.2.3-.5v-.8l-.4-.3H40l-.5-.3h0v.5l-.2-.1h-.2l-.2.1-.1.4v.2h0-.5l-.4.5v.2l.3.4zm-.6-23.2l.3 1.6.2.5.2.4.7 1 .3.2v.4h-.5l.3.8h.3l.4-.3.3-.2.4.4.3.7.3.6.2.4h1l.4-.2.4-.5-.5-.2h-.2v-.4l1.7-1.5h.4l-.3.6.3.2.6-.1.6-.3-.2-.6-.2-.6v-.6l.2-.7-.6-.8h-1l-.9.5-.6.7v.2l.1.3.1.3v.4l-.2.2h-.2l-.1-.3-.2-.1-1.3-.1-.3-.3V408.3l.5-1.2.3-.5.4-.1v-.3h-1l-1 .3-.9.1-1-.8v.5zm3.6 21V426l-.6-1.2v-.2l-.5-.3-.3.1v.5l.2.3.7 1v.5l.2.2.3.2h0zm-3.6-2.7l.2.4h.1v-.5l-.3.1zm1.6-2v-.1l-.1-.2H39v.3l.3.5.5.4.3-.2.2-.2.4.4h.2l.1-.3V421.8l-.3-.6-.2-.4-.3-.3-.6-.2-.1-.1v-.2h-.2l-.2.2-.2.2v.5l.2.4.3.2.1.3v.4l-.2.3z"></path><title>Ostrobothnia</title></g><g class="region"><path d="M150 483.3l.4-.1.3-.5v-.4l.3-.2.9.8.3.4.2.5.3 1 .2.4.5.1.5-.5.3.5.2.2.1.2.1.3v.2l-.2.7-.1.4-.1.4h-.1v.2l.2.4.2.3 1 .4.6.8h.3l.2-.2 2-1h1.2l.2.6v.3l-.1.5.1.3.2.5v1.7l-.9-.2v.5l.2.5v1.5h0l-.3.2-.3.4-.1.5v.2l.4.5v.2l.2.3-.2.5-.4 1.1v.3l.1.7.4.6.8.5v.5l-.3.4-.2.7.2.3.4.1 1.2 1.4.7.5 1.8.6.5.5.4 1.3-1.2.4-.5.3-.3.3-.3 1.7-.5 1-2.2 2.1-2.5 1h-.7l-.8-.8-1 .6-.7.9-.2.6.2.8.2.2.4.2.3.4.3.4.1.4v.6l.2.5.2.2.1.3-.4 1.5-.2.4-.3.2-1-.2h-.2v1.5l.7.8 1.6.4.3.5-.1.3-.4.7-.3.7v.4l-.1.4h-.2l-.3.3-.3.4v.7l.2.4 1.4.2.6.5.4.8.3 1 .2 1v1l.2.1-.3.9-.4.6-.5.3-1.1.1-2.2-.5H152l-.6-.2-.4-.3-.2-.4-.3-.3-.5-.2-6.5 2.2h-.9l-1.1-.8v-1.3l-.4-1.2-.4-1-.4-.7h-.7l-1.6 1.4-1 .3-.7-.2-.6-.6-1.2-1.6-.3-.4v-.5h-.1l-.3-.2-2 .5H131.6h0l-.3-.4v-1l.3-.3 1-2.6.6-1 .6-1 .7-.6.4-.3.4-.4v-.2l-.1-.4-.2-.2-.4-.4-.3-.2v-.2l.2-.1h.4l.3-.8.8-2.3v-1.3l-.5-.5-.5-.3V514l-.1-.3.1-.5.2-.2.1-.5.1-.5v-.4l-.2-.5-.7-.6-.3-.7v-.5l-.5-.5-2.6-.7h-1l-.3-.4v-.6l-.4-.4-.3.2-.5-.2-.5-.2h-.3l-.3-.3-.1-.9v-.5l-.4-.9V500.5l-.1-.6-.4-.7-.3-.9-.2-.5.3-.5 2 1 .2.2 10.2-1.7.6-.3.4-.6.4-1.2.4-1.8.6-4.4.3-1.2.3-.2 1.2.3.4-.2.8-.8.8-.4h2.1l-.2.5h.4l.4-.4.8-1.6.7-2 .1-.6.3-.6.2.2.2.4-.1.5-.1.4v.4h.3z"></path><title>Päijänne Tavastia</title></g><g class="region"><path d="M102.4 448l.1-.2.4-.4.3-.4.4.2.2.5v1l-.1.5.4 1.6.6.9 1.7 1.3v1.7l.4 1 .4.8.5.5 1 .6 1 .5 2 .4.8 1.3.3 1.1 1 1.7.6.4.3.4 1 .2.6-.3-.3-.7.4-.3 1.2-.6h.7l.8.6.6.9.5 1 .5.8.5.3.4.5v.6l-.1.8V468.4l.4.4 1.4.8h.7l2.3-1 .4.8.2.8 1 3.5.2 1.7-.2 2.4-.2 2 .2 1.4.5.5.5.2-.3.2h0v.6l.6 1.2v.7l-.2.4-.4-.2-.2-.2-.4-.1-.3.3-.2 1 .1.6.4.7.5.7v.8l-.1.2v.5l-.6.2-1.5-.8-1-.2-.7.8-.2 1.1.3.9.4.9.2.5.5-.2.6-.5.7.1.2 1-.4.5v.2l.6.3.3 1.1.2 1.5.3 1.5-2-.9-.3.5.2.5.3 1 .4.6.2.6v1.2l-.2 1.1.1 1.1.4.9-.3.3-.3.3v.8l-.3.4-1.8.8h-.6l-.3-.4-.5-1.4-.1-.3-.3.6-.3.7-.6.5-.7-.2-1.7-.8h-.8l-.8.2-3.2 2.3-.8.3h-1.5l-.3.3v.8l.1.5.3.3.2.1-.3.6-1.2 1.2-1 .6-1.2.4v.1l.1.5-1.2-.1-1.3.3-2.4 1.4-3.1.9-.5.3-.2.6.7.2.1.2v.1l-.1.7v.1l.1.1 1.2-.4h.3l.3.4-.2.5-.4.4-.7.4.1.3.2.2.3.5.3.6v.4l-.2.6-.4-.2-1.3-2-1.4-.5-.3-.2-1 .1-1.9.9h-2.6l-.4.2v.1l.3.7-.7-.2-2.3-1.8-1.5-.6-1.9 1-.6-.5-.5-.6-.6-.5-1-.1-1.1.2h-.6l-.3-.1-.6-.7v-.6l.1-.3.4-.3h.2v-.4l-.2-.2-1.1.2h-.3l-.2-.5.2-.2.3-.4.6-.6-.1-.3-.3-.2-.4-.6-.3-.8v-1.2h.7l-.2-1-.5-.6-1.3-1-2.8-.6h-2l-.3-.4v-.4l-.1-.5-.2-.3-1.3-2-.2-.4v-.4l.5-.3v-.3l-.2-.3-.4-1.8.1-.3.7.1.6.3.3-.2.1-.3.1-.2.2-.2h.2l.2-.2v-.5h0l-.1-.1.1-.2 1.2-.3v-.5l-.1-.5v-.6l.1-.3-.6-.4-.6-.3-.8-.7-1-1.7.1-1 1.4-1.4.6-1.3-.1-.8v-.3h.5l.4-.8v-1l-.4-.4-.5.5-.1.4-.3.1-.2-.5v-1.1l.5-1 .4-1.2.5-.7.5-.4.8-.5.8-.8.4-.8V480l-.8-.9-.5-.4-.6-.2v-.3l.2-.2.8-.2v-.4l-.7-.4-.3-.5v-.5l-.4-.6-.4-.1-.6-.3-.5-.7v-.6l-.5-.9-2-1.2-.1-.6 1-1.2.8-.6.9-.5h1.5l.5-.3.5-.6v-2.1l-.1-.6v-1.5l.5-.4h.9l.5-.1.1-.6-.3-3.5v-1.4l2.4-.2 2.8-.7 2.4-1.5 1.8-2.1 1-2.3.7-.7 1 .1.3.4.7 1.2.5.3 1.7.2.2.2.3-.1-.1-1v-.5l-.1-.2.5-.3 3-.2 1-.5 1.3-1.1.7-.5.4-.2.4-.3v-.6l.1-.2.2-.2.2.1v1.2h.2z"></path><title>Pirkanmaa</title></g><g class="region"><path d="M46 489.4l-.2-.3-.4-.1-.2.2v.2l.1.2.3.7.3.3.3.1v-.2l-.5-.8v-.2h.2l.1-.1zm-1.8 7.5l-.2-.1-.3.2v.3h.3l.2-.4zm1.7 14h.2l.4-.2v0-.2l-.2-.1-.7-.3-.1.2.2.4.2.2zm-1 .7l.7.5h.2v-.1l-.1-.2-.8-.7v-.9l-.2-.2-.4.3-.2.3v.2h-.2V511.7h.9zm2.1-8l.4.3h.2l.1-.1v0l-.4-.6h-.2l-.4.2V503.7H47zm0-13.4l.5.1h.1v-.2l.1-.1h.2l.1-.2v-.2l-.8-.3-.4.5h-.2v.1l.3.3zm35.3 26.3l-1.1.2h-.3l-.2-.5.2-.2.3-.4.6-.6-.1-.3-.3-.2-.4-.6-.3-.8v-1.2h.7l-.2-1-.4-.6-1.3-1-2.9-.6H75l-.4-.1-.3-.3-.1-.4v-.5l-.2-.3-1.3-2-.1-.4-.1-.4.5-.3v-.3l-.1-.3-.5-1.8.2-.3.7.1.6.3.3-.2v-.3l.2-.2.2-.1.2-.1.2-.2-.1-.5v0l.1-.2 1.2-.3v-.5l-.1-.5V497.7l-.5-.5-.6-.2-.8-.8-1-1.6v-1l1.5-1.4.5-1.3-.1-.8v-.3h.6l.4-.8-.2-1-.3-.3-.4.4-.2.4-.2.2-.2-.5-.1-.5v-.7l.5-.9.4-1.2.4-.7.6-.5.8-.5.8-.8.4-.8v-1.2l-.8-1-.5-.4-.6-.2v-.3l.1-.4.8-.1v-.5l-.6-.4-.3-.5-.1-.4-.3-.6-.4-.1-.6-.3-.5-.7-.1-.7-.4-.8-2-1.2v-.6l1-1.2.7-.7 1-.4h1.5l.5-.3.5-.5V465.3l-.1-.7v-.8l.5-.4h1l.5-.1.1-.6-.4-3.5v-1.4l-3.1-.7-2-1-.8.2-.3 1.5-.3 1-.4.8-.8 1.2-2.5 2.6-.4.7-1 1.1-2.6 1.1-1.3 1-2.6 3.6-1 .9-2 .3-6.8-1.7-2.7-.3-1.3.2-1.1.6-.6.7-.4.9-.5.8-.6.4-.5.7h1.5l.1.4v.5l.1.4.5.3v.3l-.2.4-.2.2.2.6.4.7.7 1-.1.8.3.3.3.2.4.2v.6l-.2.7-.2.7v.6l.4 1.1 1.6 1.2.7.8-.4.1-.8-.7-.5-.1v.3l.6 1.2v.4l-.2.7v.4l.3.5.5.2.5.4.5 2.1.8 1.2 1.6 1.6v.4l-.7-.3-1.5-1-2.7-1.2-.6.1-.4.2h-.1v.3l.2.5.9 1.4h.3l.7-.1h.3l.1.3.5 1.5-.8.4-3.2-.4.5.5 1.6.8.7.8.4.5.3.7-.7.4-1.5-.1-.7.4.3.2.7.3.3.2.3.3.2.3.1 1v1l.1.3.2.1V506.8h-1l.2.6-.2.3-.4.2-.2.5 1.1.6.5.4.3 1-.7.3-.7.4v.2l.1.5h-1.1l-.3.4h.6l-.4.7.2.1.1.1h.4l-.6.4H46l.2.3.2.5.2 1.2-.3.5.1.6.3.5.4.4-.7.2-1.4-.7-.6.5h.5l.4.4v.1h.3l.7 1.6 1 .5 1.9-.1.6-.5v-.8l.2-.4.3-.2.3.3.2.5v.6l.2.4.5.3.8.2.8-.2.3-.2.3-.6v-.4l.3-.4h.8l.2.2v0l-.2.7.8.4L57 521l.6.2.5.3V522.7l.1.4.6.7.3.6v.4l.4.4 3.4.7.5-.2 1-1.2.7-.5 7.4-1 .2-.2h-.1l-.8-1 .4-.6.5-.2 3.6.1.8-.1 1-.5.6-.8-.2-1.3.2-.3.2-.7v-.6l-.2-.2v-.6h.4l1.9 1.8 1 .4v-.6l.3-.3.3-.3h.2v-.3l-.5-.2zm-37.9-2.7v-.2V514h0v-.1z"></path><title>Satakunta</title></g><g class="region"><path d="M249.7 478.7l-4 6.1-3.1 3.4-.5.7-.5 1.8-.5.8-3.3 4-.8.6-1.5.7-.5.5-.4.7-.5 1.3-.4 1-3.4 3.7-.6 1-.3.6-.4.7-1.4 2.2-1.7 1.6-3.5 2.2-1.2 1-1.7 1.6-1.3.8-.4.5-.7 1.2-1.5 1.7-.4.7-.4 1v0l-1 1.4-2 .6-1 .8-3.5 3.6-2 3.3-2.3 1.6-3.4 4.5h0l-.4-.2h-.7l-.1-.1h0v-.2l.2-.1-.2-.3-1.1-.9-.4-.4-.3-.5-.3-1.3-.2-.4-1-.4-1 .1-1-.2-.2-.6-.7-1h-4.1l-.8-.4-.6-.8-1.1-1.6-.8-.8-3-1.2-.7-.5-1.6-1.8-.3-.6v-.2h.3l.4.2.7.2.7-.1.4-.3v-.4l-.2-.2-.2-.4-.1-.4-.3-.4-.3-.1-.8-.2-.2-.1-.1-.3.4-.6-.2-.6v-.7l.3-1 .8-.6.4-.2.3-.3-.3-.3h-.1l-.4-.1h-.2v-.4l.5-1 .1-.5v-.8l2.7-.3.5-.2.4-.5v-.5l.2-.2.2-.2.1-.2h0v-.4h-.6l-.6-.3-.3-.5.2-.4v-.8l-1.3-1.7-.9-.8-.3-.5.4-.2.3-.2-.4-.3h-2.2l-4-.7-.1-.8.4-.4.7-.3 1.7.2.6-.1 2-1.3 1.2-.2 1.2.1 5.5 2 15-.6 3.8-2.3 1.3-1.3.3-.6.1-.5.1-.4.1-.2.6-.8.5-.6.5-.1.4.1.7 1.4.6.4 2 .2 2.4-.6 1.3-.8.2-.6v-1l.1-.4h.4l1.3.2h3.7l3.2-.7 1.3-.6.7-.6 1.6-2.4 2.9-1.8 1.5-1.3.8-2 11.5-6.2h2z"></path><title>South Karelia</title></g><g class="region"><path d="M98.9 400.8l.5 1.2.5 1.1.6 1 .7.8.8.6.9.4 4 1 1.6 1.3 2.1 2.4.6 1-.5.3-.3.4-.3.4h1l3.3 1.7-.4 1.2-.4 1-.6.6-.8.2.2 1.4h.4l.1.4v1.1l.2.5.1.7.3.6.4.2.1.8v.8l.4.9h.5l.8.3.6.8.2.7-.3.7-1.4.2-.3.2v1l1.4 2.4 1.8 4.2.8 1.3.5.6.3.8-1.2 1.3-.2.3v.5h1.7v.4l-.2.1h-.5V440.9l.1.2.1.5v.4l-.5.2h-.1v.7h.1v.2h0-.3 0v1.3l-.1.7-.3.3v.5l-.2.3h-.3l-.3.2-.5.3-.5.5h-.3v-.3l-.3-.4-.3-.1h-.2l-.4-.3-1 .5v.5l.2.6-.3.5-.5.1-2-.7-.4.1-.7.5-.9 1-2 2.5-.6 1.3-1.7-1.3-.6-.8-.4-1.7v-.5l.1-.5v-.5l-.2-.5-.4-.2-.3.4-.4.4-.1.3h-.2v-1.3h-.4l-.2.3v.6l-.3.3-.4.2-.7.5-1.3 1.1-1 .5-3 .2-.5.3v.2l.1.6v.9h-.2l-.2-.1-1.7-.2-.5-.3-.7-1.2-.3-.4h-1l-.6.6-1 2.3-1.9 2.1-2.4 1.5-2.8.7-2.5.2-3-.6-2-1h-.8l-.4 1.6-.3 1-.3.8-.9 1.2-2.4 2.6-.5.7-1 1.1-2.6 1.1-1.2 1-2.7 3.6-1 .8-2 .4-6.7-1.7-.1-.3v-.2l-.2-.3h0v-.8l.1-2.9.3-1.6 1-.3.1-.6-.2-.6-.3-.5v-.7l.3-.5.7-.4 1-.3v-.6l-.1-.4-.5-.5-.6-.3-.4-.1-.3-.6v-1.6l-.1-.8-.2-.4v-.5l.4-.2v-.7l-.3-.4-.9-.3-1.8.6V452.7h0l-.3-.1h-.2l-.1-.3.2-.5.1-.4.2-.7v-1l-.1-.4.1-1 .8-2 .4-1.6.2-.8v-.8h-.3l-.1-.3v-1l-.1-.8 1.1-.8L52 439l1.8-2.2.2-1-.3-.4-.5-.8-.2-.4-.2-1.3v-.8l.1-1.7.3-1 .3-.7.2-.5.6-.3 1.9 2.2 1 .8 1.7.9 4.4 1 .9-.1.7-.6 1-1 2-2.8.4-.4.3-1v-1.3l.4-1.4v-.5l.2-1 1.6-3.6.4-.6.4-.4.5-.2-.2-.3-.1-.2.2-.5.8-.4h.3l.5.1.3-.2.3-1.3v-1.3l.4-.1.3-.2V411.7l-.2-1-1.5.2-.3.1h-.2l.1-.2.3-1.2v-.2h-.3l-.2.2v-.2l.2-.5.3-.5v-.4H73l-.5-.3v-.7l.2-.5.7-.7 1.2-.4.3-.3v-.1l-.5-.8.3-.3 2-1.2-.3-.6.7-.1 2.3.2 1.5.4.6.4.5-.3v-.7l.3-.7h.5l2.5.5 1-.3.9-1.3 1.5-3.2.8-1.2 1.2-.6 1-.1 1.4.1 1.3.5 1 .6.3.6.7 1.4.5.7.9 1 1.1.8z"></path><title>Southern Ostrobothnia</title></g><g class="region"><path d="M226.2 452h.4v-.3l.6-1 .6-.4 1 .4.7 1.4.7 2.5.6 1.7.4.8.9 1.4.5.5.1 1.3v3l.5 1.8.4 1.3.8 1.8 1.2 1.8 1.4 1.4.7.5.5.8-.5 1-.3.8v1.5l1.5 1.5.2.4-.5.9.4.3.1 1-1 2-2 3-.8 1.9-1.5 1.3-3 1.8-1.5 2.4-.7.6-1.3.6-3.2.7h-3.7l-1.3-.3h-.4l-.1.4v1.1l-.2.6-1.4.8-2.2.6-2.1-.2-.6-.4-.7-1.4-.4-.1-.5.1-.5.6-.6.8v.3l-.2.3-.1.5-.3.6-1.3 1.4-3.8 2.2-15 .6-5.5-2-1.2-.1-1.2.2-2 1.3h-.6l-1.7-.1-.7.3-.4.4.1.8 4 .8 2.2-.1.4.3-.3.2-.4.2.3.5.9.8 1.3 1.7v.8l-.2.4.3.5.5.3h.6v.4h.1l-.1.2-.2.2-.2.2v.5l-.4.5-.5.2-2.7.3-5 .5-1.3-1-.4-.6v-.3l-.1-.7v-.3l-.1-.8-.2-.7-.3-.4-.2-.5-.1-.6-.3-.5h-.8l-.5.2-.4.2-.3.4-.4 1-.2.3-.7.7-.7.5-.8.2h-.4l-.2-.5.1-.2.5-1.1-.1-.4-.2-.3-.2-.6-.2-.4-.6-.2-2.2.6-.4-1.3-.5-.5-1.8-.6-.7-.5-1.2-1.4-.4-.1-.2-.3.2-.7.2-.4.2-.2-.1-.3-.8-.5-.4-.6-.2-.7.1-.3.4-1.1.2-.5-.1-.3-.1-.2-.3-.5-.1-.2.1-.5.3-.4.2-.2h.1v-1.5l-.1-.5-.1-.3v-.2l.8.2v-.4l.1-.8v-.5l.2-.1.6-.4v-.6l.1-.4.3-.7.5-.2 2.4 1.2.5-.4.3-2.3v-.8l-.2-.7-.8-1.6-.3-.5-2-2.3-.2-.4-.2-.8.2-1.8v-.5l-.2-.4H160.5l.3-1.5v-1.3l.3-.9.7-.4v-1.2l-3.3-5.5v-1.8l2-3 1.6-1.4h.5l.7.6.2-.1.3-.3.3-.3.2-.3v-.3h0-.2v-.1l.3-.6.5-.2H165.8l.2.3.7.7.6.4h.6l.2-.1-.3-.3-.2-.5v-1.1l-.2-.6-.1-.3v-.5l.7-.3.4-.3.1-.2v-.4h0-.1l-.1-.1.1-.6.3-.4.7-.4 1.2-.3v-.4l-1.7-1.6-.1-.5.1-.4.1-.3.2-.7.2-1 1.3 1h.8l.4-.3.3-.4-.2-.1v-.1l.1-.5.3-.3.5-.4h.4l1.7 1h.3l-.1-.5v-.8l.2-.1h.4l1 .4h1l1.2-.8.4.1.4.2.5.7.1.3h.4l1.3-.6h.5l.6-.3 1-.8.1-.1.2-.3-.2-.7v-.1l.7.2.1.1.8.5.5.5v.1l.5.2.7.6.4.3.8 1 3 2.9.5.4v.5l1 .3.7.3-.5 1.3.5 1 1.7 2h.2l.9-.1.4-.2.5.5.6.6.4.2.3-.4v-.5h-.4l.3-.2h1.4l.8-.2.2-.6.3-1 2.8-1.9h1.6l.8-.2.3-.4v-.7l-.7-.4-.2-.5v-.3l-.2-.5-.3-.3-.2-.1v-.4l.1-.2.3-.3.3-.1h.4V448.4l-.4-.3v-.3l.1-.3 1.7.7.6-.2.1-.6-.1-.6-.4-.7.2-.6.3-.3.2-.6.3-1.9h0v-.1l-.2-.2.2-.3.4.5 1.9.4.2.2.3-.1v-.7l-1.3-.5.4-.3 2.3-.2.5-.3.4-.4h-.6l.1-.2.2-.2.3-.6.4-.7.2-.8 3.5 1.2.5.3 2 2 .4.3.6.7.1.4.6.7 1 .7.2.3-.6.5.2.3 2 .9.2.4-.2.3-.2.8-.2.9-.1.5v.7h.2l.2.2h.1l-.1.8v.2l.2.2.7.4z"></path><title>Southern Savonia</title></g><g class="region">					<path d="M129 506.9l.4-.2.3.4v.6l.4.4h1l2.6.7.4.5.1.5.3.7.7.6.2.5v.9l-.2.5-.2.2-.1.5v.9l.6.3.5.5v1.3l-.8 2.3-.3.7h-.4l-.3.2v.2l.4.2.4.4.2.2v.7l-.3.3-.4.3-.7.7-.6.9-.6 1-1 2.6-.2.4-.1.4v.5l.2.3h.2l.2.1.1.7.3.4.5.6.2.3v.3l-.4.2-.4.2-.6.3-.5.7-.2.4-.2.6.1.2.8-.7h.6l1.2.2.2.2-1.9 1-.2.2.3 1.3v.3h-.2l-1.6-.6-.8-.1-.7.2-1.3.5-3.7.5-3.3-.3-.4.3-.4.9-.2.9v1.9l-1 .9-1.4.3-1.2-.5-.2-.7-.2-.9-.3-.1-1-.2-.7.4-.2.6v.6l-.4.2-.8-1.5-.4-.5-1-.6-5.7-1.6-1.2.2-3-.2-1.5-.4-1.2-1.4-2-.3-1-.8-.3-.6-.8-1H93l-2.2 1-1.2.1-1-.2-.7-.6-1.3-1.1-.4-.8.2-.4.3-.7.5-.5.3-.3-.1-.5-1.1-.2-.6-.6v-1.2l.4-.9.8-.2 1.4.2.4-.1v-.2l-.2-.7v-.2h.4l.3-.3.1-.7v-.5l-.3-.6-.4-.1-.6-.5-1-1.4 1.9-1 1.5.7 2.3 1.8.7.2-.2-.7v-.1l.3-.2h2.6l1.9-.9 1-.1.3.2 1.4.5 1.3 2 .4.2.3-.6-.1-.4-.3-.6-.3-.5-.2-.2v-.3l.6-.4.4-.4.2-.5-.3-.4h-.3l-1.2.4h-.1v-.2l.1-.7V518l-.8-.2.2-.6.5-.3 3.1-.9 2.4-1.4 1.3-.3 1.2.1v-.5l-.1-.1 1.2-.4 1-.6 1.2-1.2.3-.6h-.2l-.3-.4-.2-.5v-.8l.4-.3h1.5l.8-.3 3.2-2.3.8-.3h.8l1.7.9.7.2.6-.5.3-.7.3-.6.1.3.5 1.4.3.4h.6l1.8-.8.3-.4v-.8l.3-.3.3-.3v1.5l.4.1h.3l.5.3.5.2z"></path><title>Tavastia Proper</title></g><g class="region"><path d="M95.7 575.9l-.3.2.2.2h.1l.2.2v-.6h-.2zm8.2-6.7l-.6-.1-.5.2-.3.4-.2.4v.1h.1l.4.3h.5v-.1h.3l.3-.3v-.4h0v-.5zm-11.4 4.1h-1.3v.1l-.3.2v.1h.1l.1.2v.1H91v.1l.1.3v0l1-.2.1-.3.3-.2v0-.4zm-2.6-.3h-.6l-.1.2.3.2h.5l.2-.1v-.1l-.3-.2h0zm-8.6 5.5h-.2v.3h.2v.2-.5zm49.2-17.8l-.3.3-.2.4V561.7h.2l.2-.1h.3v-.2H131v-.2l-.3-.3-.2-.2zm33.2-16.7l2-4-.2-.2-1-.2-.6-.7-.6-1-.8-.7-1.6-1-.4-.8V534l-.2-.2-.4-1-.3-.5h-1.3l-.5-.1V533l.1.1-.2.9-.4.6-.6.3-1 .1-2.2-.5H152l-.6-.2-.4-.3-.2-.4-.3-.4-.5-.1-6.5 2.2h-.9l-1.1-.7v-1.3l-.3-1.3-.4-1-.5-.6h-.7l-1.6 1.4-1 .3-.6-.3-.6-.5-1.3-1.6-.2-.5-.1-.4v-.1l-.3-.2-2 .5.1.7.3.5.5.5.2.4v.2l-.4.3-.4.1-.6.4-.5.6-.2.5-.2.6.1.2.9-.7.5-.2 1.2.4.2.1-1.8 1-.3.3.3 1.2v.3l-.3.1-1.6-.7h-1.5l-1.2.7-3.8.5-3.2-.3-.4.2-.4 1-.2.8v1.9l-1 1-1.5.2-1.1-.5-.2-.7-.2-.9h-.4l-1-.2-.7.3-.1.6v.7l-.5.1-.7-1.5-.4-.5-1-.6-5.8-1.6-1.2.2-.3.8v.5l.3.4.3.1.1.6-.1.4-.3.8-.5.6-.3.1-.1.7.1.7.1.7-.3.6-2.5.7-.6.5-.5 1.1 1.9.1.3.8v.7l-.2 1.2-.5.9-.4.2-.3 1.2-.2 1.2-1 1-1 .7-.2.4-.1.6h-.4l-.4.2.2.2.3.2.4.5.4.7v.5l-.1.7h-.3l-1.3-.3h-.3l-.5.2-1.3 1.2-1.1.5-1.1.2-1-.1-.4-.2-.4-.3v-.3l.2-.3h-.3l-.4.2-2.4 2.8-1.8 1.3-1.1.3-1-.6-.1-.3-.2.3-.4.5-.1.6.1.7.4.5.5.4.6.2H85l2.3-.5 1.2.5-.3.3-.6 1.1-.3.5-1.8.7-.4.4v.2l-.2 1.4v.5l.2.3h.2v-.4l.2-.5 1 .3v-.3l.2-.3h.2l.3.1.2.2v.7h.3l.7-.9 1.5-3.5.4-.3-.1 1-.4 1.4-.4 1-.6 1-.5.6-.6.4H87l-.3-.1h-.3v1.3l-.9.2-3.3 1.5-1 .2-.3.3-.6 1-.4.4h.4l1.4-.3.4-.2.6-.1 1.4.2.3-.3 4-.6v-.3l-.4-.2-.3-.8v-.8l.4-.6 2-1.1 1-1 .8-1.4.2-.3.5-.4.2-.3.2-.5v-1.1l.3-.2.4-.1.1-.5.1-.5.2-.3.3-.2.8-.3-.2.5v.8l.2.5v.3l-.3.2-.7.2-.4.4-1 1.9-.2.7h.5l1-.5 1.6-.5h.3l.2.2.3.6.3.2 3.8-.5.7.5 1.7-1.7 1.6-.3.3-.2.4-.4.2-.5.2-.4.3-.3h.4v.3l-.4.6.2.4h.4l.5-.7.2.2h.3l.9-.5h.2l.4.2.3.3.4.1.4-.3-.5-.4v-.4l.4-.2h.6l.8.4h.4l.2-.1.7-.6-.3-.3.4-.6.5-.1h1.2l-.2.6v1.2l-.3.5-.3.2-.3.4-.2.7.4-.2.5-.7.4-.2.2.8 1-1.4.7-.6h.4l-.3.4-.7 1.6-.1.6h.6l.6-.2.4-.4 1-1.4 1.5-1.2v-.2l-.5-.4.5-.5.2-.3.2-.5-1.6.7.1-.6.3-.2.4-.2.3-.3.2-.6-.2-.2-.3-.2-.4-.3-.2-.5v-.2l.4.1 1.5.9.2.3.1.4v.5l.2.4h.3l.1-.2V562.3l.2-.2.2-.1.7-.3 1.2-.2.4-.2.6-.5.3-.3-.5-1.3.9-.2.6.7v.9l-.9.3.3.5.5.2 2-.2.2-.3.5-2.3.4-.6h.5l.1.6v.7l-.3.7-.3.3.3.6.4.1.4-.4h.3l.2-.3-.5-.3.3-.4 1-.6v.7h.5l1.4-.4.5-.3-.4-.5h.3l.3-.1-.3-.4-.9-.6v-.4l.4.3.3.2.1-.3v-.7H136.2l.7-.3v-1l1 .3.2.3v.7h3.3l.2-.1.1-.3.2-.8.1-.1h.2v-.2l.2-.6v-.6l-.1-.5-.4-.2v-.3l1.8-.6.6-.4.4-.4.6-.4h.5l.3 1h-1.3v.4l.5.3-.3.3-.2.4v.7l.2.3 1.9 2.1.6.4.4-.3v-.3l1.6-.6-1.6-.8-.8-.7-.2-.8.4-.3.4.3.7 1 .4.2h.5l.5.1.3.6-.1.3.3.5.3.3.3.1h.5l-.2-1-.7-1.2-.2-.7v-.6l.5-1 .3-1-.5-.2-.5-.5-.8-1.2.6.3.5.3 1.4 1.5h.7l.1-.3.2-.2h0l-.2.6 1 1.6v1l1.2-.3.2-.2.1-.6v-.5l-.1-.3-.3-.1-.2-.3-.5-.9-.8-.6-.3-.3-.1-.6H153.4l.2-.3v-.9l-.2-.4-.6-.3-.5-.8-.2-.4-1.3-.6v-.3h.6l.9.4.7.6.9 1.2.3.2.7.4 1 1 .1.4.2-.2.5-.5h.2l2.2.4-.7-1-.3-.7v-.6h.3l.4.5.4.5.2.3.2.4.3.8.3.7.5.4.1-.2v-.6l.3-.2h.2l.2-.1v-.8l.5.6.2.2.3.1-.2-.7.1-.2h.7l.2-.2.2-.4.4-.7-.7-1.5.5-1.9zm-78.5 28l-.2-.3h0V572.6l.2.2h.3v-.4 0-.3l-.3-.1zm63.3-14.1l-.1.4.1.5h.4l.4-.2.2-.2.3-.6-.8-.1-.5.2zM143 554l-.4.8.2 1 .5.7.7.2-.4.8v.3l.1.2.6.3v-.6l.2-.5.4-.3.4-.2.2-.3-2.1-2.2-.4-.2zm15-2l-.3-.3-.6-.2h-.2l-.2.1v.2l.2.3.3.8h1l.2-.3-.1-.3-.4-.2z"></path><title>Uusimaa</title></g></g>
+        <g class="pisteet"><circle class="piste" cx="78" cy="461" r="2.51" style="animation-duration:3.78s;animation-delay:-2.29s"/><circle class="piste" cx="203" cy="371" r="2.1" style="animation-duration:3.81s;animation-delay:-2.56s"/><circle class="piste" cx="191" cy="344" r="2.16" style="animation-duration:3.08s;animation-delay:-2.54s"/><circle class="piste" cx="185" cy="518" r="1.76" style="animation-duration:4.66s;animation-delay:-4.71s"/><circle class="piste" cx="92" cy="99" r="2.23" style="animation-duration:2.84s;animation-delay:-0.99s"/><circle class="piste" cx="163" cy="50" r="2.56" style="animation-duration:2.71s;animation-delay:-0.09s"/><circle class="piste" cx="124" cy="184" r="1.59" style="animation-duration:4.3s;animation-delay:-2.0s"/><circle class="piste" cx="248" cy="415" r="1.47" style="animation-duration:2.64s;animation-delay:-2.45s"/><circle class="piste" cx="185" cy="154" r="1.44" style="animation-duration:3.09s;animation-delay:-3.94s"/><circle class="piste" cx="132" cy="420" r="2.41" style="animation-duration:3.81s;animation-delay:-2.91s"/><circle class="piste" cx="198" cy="399" r="2.0" style="animation-duration:3.95s;animation-delay:-1.87s"/><circle class="piste" cx="81" cy="113" r="1.73" style="animation-duration:4.32s;animation-delay:-2.82s"/><circle class="piste" cx="193" cy="483" r="2.41" style="animation-duration:5.19s;animation-delay:-0.02s"/><circle class="piste" cx="173" cy="223" r="1.68" style="animation-duration:4.44s;animation-delay:-3.56s"/><circle class="piste" cx="119" cy="105" r="2.32" style="animation-duration:3.35s;animation-delay:-4.83s"/><circle class="piste" cx="104" cy="241" r="1.86" style="animation-duration:3.64s;animation-delay:-0.8s"/><circle class="piste" cx="224" cy="42" r="1.4" style="animation-duration:5.09s;animation-delay:-0.79s"/><circle class="piste" cx="117" cy="432" r="1.96" style="animation-duration:3.15s;animation-delay:-0.47s"/><circle class="piste" cx="151" cy="391" r="1.49" style="animation-duration:5.15s;animation-delay:-3.13s"/><circle class="piste" cx="228" cy="462" r="1.72" style="animation-duration:4.24s;animation-delay:-1.15s"/><circle class="piste" cx="121" cy="525" r="2.56" style="animation-duration:2.83s;animation-delay:-3.47s"/><circle class="piste" cx="182" cy="121" r="1.7" style="animation-duration:4.57s;animation-delay:-4.59s"/><circle class="piste" cx="43" cy="81" r="2.36" style="animation-duration:2.86s;animation-delay:-4.89s"/><circle class="piste" cx="245" cy="398" r="1.94" style="animation-duration:3.06s;animation-delay:-2.29s"/><circle class="piste" cx="197" cy="51" r="1.56" style="animation-duration:3.1s;animation-delay:-1.39s"/><circle class="piste" cx="200" cy="257" r="1.9" style="animation-duration:4.27s;animation-delay:-4.59s"/><circle class="piste" cx="133" cy="262" r="2.57" style="animation-duration:3.15s;animation-delay:-3.8s"/><circle class="piste" cx="115" cy="239" r="2.46" style="animation-duration:4.69s;animation-delay:-3.62s"/><circle class="piste" cx="113" cy="142" r="2.43" style="animation-duration:3.15s;animation-delay:-3.15s"/><circle class="piste" cx="154" cy="366" r="2.59" style="animation-duration:4.27s;animation-delay:-4.68s"/><circle class="piste" cx="211" cy="127" r="2.33" style="animation-duration:3.15s;animation-delay:-3.86s"/><circle class="piste" cx="128" cy="441" r="1.49" style="animation-duration:3.46s;animation-delay:-3.66s"/><circle class="piste" cx="210" cy="192" r="1.69" style="animation-duration:2.83s;animation-delay:-2.17s"/><circle class="piste" cx="188" cy="142" r="1.94" style="animation-duration:4.16s;animation-delay:-3.27s"/><circle class="piste" cx="116" cy="507" r="2.09" style="animation-duration:5.09s;animation-delay:-2.68s"/><circle class="piste" cx="154" cy="326" r="1.58" style="animation-duration:4.85s;animation-delay:-4.25s"/><circle class="piste" cx="221" cy="353" r="1.7" style="animation-duration:4.96s;animation-delay:-0.95s"/><circle class="piste" cx="99" cy="358" r="2.53" style="animation-duration:3.09s;animation-delay:-1.35s"/><circle class="piste" cx="229" cy="232" r="2.46" style="animation-duration:3.11s;animation-delay:-0.26s"/><circle class="piste" cx="149" cy="529" r="1.52" style="animation-duration:4.17s;animation-delay:-3.01s"/><circle class="piste" cx="154" cy="462" r="1.69" style="animation-duration:2.7s;animation-delay:-0.19s"/><circle class="piste" cx="236" cy="177" r="2.39" style="animation-duration:4.43s;animation-delay:-3.86s"/><circle class="piste" cx="141" cy="484" r="1.61" style="animation-duration:4.15s;animation-delay:-3.67s"/><circle class="piste" cx="208" cy="463" r="1.67" style="animation-duration:4.47s;animation-delay:-4.84s"/><circle class="piste" cx="168" cy="441" r="2.14" style="animation-duration:4.05s;animation-delay:-0.77s"/><circle class="piste" cx="229" cy="293" r="1.64" style="animation-duration:3.33s;animation-delay:-0.43s"/><circle class="piste" cx="186" cy="369" r="1.93" style="animation-duration:2.64s;animation-delay:-3.8s"/><circle class="piste" cx="257" cy="450" r="1.84" style="animation-duration:2.76s;animation-delay:-4.28s"/><circle class="piste" cx="102" cy="445" r="1.83" style="animation-duration:4.09s;animation-delay:-4.52s"/><circle class="piste" cx="86" cy="432" r="2.19" style="animation-duration:4.92s;animation-delay:-0.1s"/><circle class="piste" cx="238" cy="256" r="1.57" style="animation-duration:4.4s;animation-delay:-2.16s"/><circle class="piste" cx="205" cy="481" r="2.49" style="animation-duration:2.69s;animation-delay:-5.11s"/><circle class="piste" cx="221" cy="382" r="1.43" style="animation-duration:4.42s;animation-delay:-0.19s"/><circle class="piste" cx="185" cy="460" r="2.28" style="animation-duration:4.25s;animation-delay:-2.69s"/><circle class="piste" cx="100" cy="475" r="1.49" style="animation-duration:3.43s;animation-delay:-0.0s"/><circle class="piste" cx="216" cy="220" r="2.48" style="animation-duration:4.02s;animation-delay:-1.37s"/><circle class="piste" cx="168" cy="185" r="2.35" style="animation-duration:4.52s;animation-delay:-1.54s"/><circle class="piste" cx="173" cy="391" r="2.22" style="animation-duration:4.98s;animation-delay:-3.37s"/><circle class="piste" cx="107" cy="547" r="1.9" style="animation-duration:4.94s;animation-delay:-0.67s"/><circle class="piste" cx="154" cy="163" r="2.09" style="animation-duration:4.66s;animation-delay:-0.71s"/><circle class="piste" cx="115" cy="386" r="2.1" style="animation-duration:4.22s;animation-delay:-3.21s"/><circle class="piste" cx="134" cy="206" r="2.17" style="animation-duration:4.18s;animation-delay:-4.78s"/><circle class="piste" cx="170" cy="427" r="2.27" style="animation-duration:5.18s;animation-delay:-0.63s"/><circle class="piste" cx="160" cy="354" r="2.1" style="animation-duration:3.61s;animation-delay:-1.38s"/><circle class="piste" cx="115" cy="399" r="1.5" style="animation-duration:3.75s;animation-delay:-0.84s"/><circle class="piste" cx="227" cy="156" r="2.12" style="animation-duration:4.55s;animation-delay:-5.05s"/><circle class="piste" cx="116" cy="458" r="2.24" style="animation-duration:3.85s;animation-delay:-4.0s"/><circle class="piste" cx="175" cy="12" r="2.5" style="animation-duration:3.89s;animation-delay:-2.0s"/><circle class="piste" cx="115" cy="211" r="1.76" style="animation-duration:3.27s;animation-delay:-5.14s"/><circle class="piste" cx="151" cy="510" r="1.6" style="animation-duration:4.36s;animation-delay:-4.15s"/><circle class="piste" cx="182" cy="167" r="1.93" style="animation-duration:4.95s;animation-delay:-1.77s"/><circle class="piste" cx="172" cy="131" r="2.2" style="animation-duration:4.92s;animation-delay:-3.5s"/><circle class="piste" cx="123" cy="472" r="2.37" style="animation-duration:3.12s;animation-delay:-2.96s"/><circle class="piste" cx="163" cy="18" r="1.86" style="animation-duration:4.98s;animation-delay:-0.62s"/><circle class="piste" cx="57" cy="454" r="1.56" style="animation-duration:4.12s;animation-delay:-3.55s"/><circle class="piste" cx="213" cy="175" r="2.42" style="animation-duration:3.89s;animation-delay:-0.85s"/><circle class="piste" cx="118" cy="230" r="1.73" style="animation-duration:4.45s;animation-delay:-0.26s"/><circle class="piste" cx="210" cy="242" r="1.73" style="animation-duration:3.04s;animation-delay:-2.86s"/><circle class="piste" cx="208" cy="148" r="2.15" style="animation-duration:3.16s;animation-delay:-3.05s"/><circle class="piste" cx="174" cy="25" r="2.41" style="animation-duration:3.88s;animation-delay:-3.56s"/><circle class="piste" cx="216" cy="482" r="1.49" style="animation-duration:5.15s;animation-delay:-2.85s"/><circle class="piste" cx="230" cy="313" r="1.45" style="animation-duration:2.68s;animation-delay:-0.66s"/><circle class="piste" cx="152" cy="76" r="1.77" style="animation-duration:4.44s;animation-delay:-2.23s"/><circle class="piste" cx="170" cy="39" r="1.56" style="animation-duration:4.66s;animation-delay:-5.1s"/><circle class="piste" cx="113" cy="536" r="2.4" style="animation-duration:3.78s;animation-delay:-5.07s"/><circle class="piste" cx="155" cy="432" r="1.46" style="animation-duration:3.22s;animation-delay:-4.47s"/><circle class="piste" cx="144" cy="373" r="2.16" style="animation-duration:4.24s;animation-delay:-2.88s"/><circle class="piste" cx="268" cy="435" r="2.55" style="animation-duration:4.3s;animation-delay:-1.0s"/><circle class="piste" cx="138" cy="331" r="1.97" style="animation-duration:4.38s;animation-delay:-4.16s"/><circle class="piste" cx="261" cy="399" r="1.97" style="animation-duration:3.06s;animation-delay:-5.14s"/><circle class="piste" cx="179" cy="439" r="1.73" style="animation-duration:4.46s;animation-delay:-4.27s"/><circle class="piste" cx="60" cy="467" r="2.02" style="animation-duration:3.5s;animation-delay:-1.57s"/><circle class="piste" cx="171" cy="417" r="1.87" style="animation-duration:4.2s;animation-delay:-1.27s"/><circle class="piste" cx="163" cy="166" r="1.5" style="animation-duration:4.66s;animation-delay:-0.49s"/><circle class="piste" cx="237" cy="387" r="1.56" style="animation-duration:5.02s;animation-delay:-1.44s"/><circle class="piste" cx="92" cy="527" r="2.49" style="animation-duration:3.78s;animation-delay:-1.95s"/><circle class="piste" cx="169" cy="109" r="2.46" style="animation-duration:3.58s;animation-delay:-2.24s"/><circle class="piste" cx="172" cy="527" r="1.96" style="animation-duration:4.67s;animation-delay:-0.29s"/><circle class="piste" cx="184" cy="70" r="2.27" style="animation-duration:4.29s;animation-delay:-4.13s"/><circle class="piste" cx="257" cy="463" r="2.26" style="animation-duration:4.73s;animation-delay:-1.86s"/><circle class="piste" cx="241" cy="328" r="2.58" style="animation-duration:3.15s;animation-delay:-0.52s"/><circle class="piste" cx="213" cy="204" r="2.35" style="animation-duration:5.14s;animation-delay:-2.41s"/><circle class="piste" cx="76" cy="439" r="2.43" style="animation-duration:3.43s;animation-delay:-0.47s"/><circle class="piste" cx="178" cy="81" r="1.93" style="animation-duration:3.51s;animation-delay:-4.77s"/><circle class="piste" cx="139" cy="252" r="1.98" style="animation-duration:4.03s;animation-delay:-1.21s"/><circle class="piste" cx="214" cy="58" r="1.48" style="animation-duration:2.67s;animation-delay:-0.99s"/><circle class="piste" cx="25" cy="565" r="1.8" style="animation-duration:4.68s;animation-delay:-4.3s"/><circle class="piste" cx="32" cy="69" r="1.58" style="animation-duration:4.65s;animation-delay:-4.47s"/><circle class="piste" cx="150" cy="187" r="2.41" style="animation-duration:3.94s;animation-delay:-1.44s"/><circle class="piste" cx="145" cy="346" r="1.99" style="animation-duration:4.39s;animation-delay:-0.28s"/><circle class="piste" cx="169" cy="70" r="1.67" style="animation-duration:5.07s;animation-delay:-4.75s"/><circle class="piste" cx="215" cy="390" r="2.27" style="animation-duration:3.97s;animation-delay:-3.69s"/><circle class="piste" cx="201" cy="116" r="2.41" style="animation-duration:4.26s;animation-delay:-2.48s"/><circle class="piste" cx="206" cy="97" r="1.86" style="animation-duration:4.06s;animation-delay:-3.58s"/><circle class="piste" cx="42" cy="443" r="1.65" style="animation-duration:4.8s;animation-delay:-0.52s"/><circle class="piste" cx="147" cy="444" r="2.03" style="animation-duration:4.81s;animation-delay:-0.16s"/><circle class="piste" cx="221" cy="430" r="2.04" style="animation-duration:4.09s;animation-delay:-4.15s"/><circle class="piste" cx="165" cy="293" r="1.43" style="animation-duration:3.91s;animation-delay:-2.05s"/><circle class="piste" cx="114" cy="369" r="1.88" style="animation-duration:5.12s;animation-delay:-2.52s"/><circle class="piste" cx="207" cy="500" r="1.99" style="animation-duration:4.68s;animation-delay:-2.27s"/><circle class="piste" cx="99" cy="565" r="2.05" style="animation-duration:4.4s;animation-delay:-4.86s"/><circle class="piste" cx="226" cy="182" r="2.51" style="animation-duration:3.68s;animation-delay:-0.22s"/><circle class="piste" cx="135" cy="342" r="1.55" style="animation-duration:3.3s;animation-delay:-2.74s"/><circle class="piste" cx="121" cy="276" r="2.48" style="animation-duration:3.73s;animation-delay:-0.96s"/><circle class="piste" cx="79" cy="421" r="1.63" style="animation-duration:3.84s;animation-delay:-3.55s"/><circle class="piste" cx="197" cy="202" r="1.56" style="animation-duration:4.21s;animation-delay:-0.39s"/><circle class="piste" cx="150" cy="102" r="1.63" style="animation-duration:4.63s;animation-delay:-5.08s"/><circle class="piste" cx="186" cy="356" r="1.79" style="animation-duration:3.19s;animation-delay:-1.63s"/><circle class="piste" cx="161" cy="503" r="1.53" style="animation-duration:3.52s;animation-delay:-1.98s"/><circle class="piste" cx="154" cy="217" r="2.01" style="animation-duration:4.5s;animation-delay:-4.56s"/><circle class="piste" cx="198" cy="535" r="2.04" style="animation-duration:3.25s;animation-delay:-4.17s"/><circle class="piste" cx="237" cy="491" r="1.9" style="animation-duration:3.74s;animation-delay:-3.25s"/><circle class="piste" cx="191" cy="249" r="1.65" style="animation-duration:3.98s;animation-delay:-4.37s"/><circle class="piste" cx="167" cy="369" r="2.04" style="animation-duration:4.24s;animation-delay:-1.88s"/><circle class="piste" cx="137" cy="100" r="2.43" style="animation-duration:4.81s;animation-delay:-2.02s"/><circle class="piste" cx="82" cy="557" r="2.37" style="animation-duration:3.2s;animation-delay:-1.35s"/><circle class="piste" cx="249" cy="364" r="1.78" style="animation-duration:4.95s;animation-delay:-3.56s"/><circle class="piste" cx="185" cy="505" r="2.6" style="animation-duration:5.0s;animation-delay:-4.07s"/><circle class="piste" cx="45" cy="518" r="1.69" style="animation-duration:4.91s;animation-delay:-4.5s"/><circle class="piste" cx="152" cy="300" r="1.52" style="animation-duration:4.49s;animation-delay:-3.85s"/><circle class="piste" cx="87" cy="541" r="2.35" style="animation-duration:4.76s;animation-delay:-3.01s"/><circle class="piste" cx="159" cy="40" r="2.22" style="animation-duration:2.93s;animation-delay:-3.11s"/><circle class="piste" cx="197" cy="469" r="2.22" style="animation-duration:2.65s;animation-delay:-4.16s"/><circle class="piste" cx="230" cy="133" r="1.54" style="animation-duration:4.97s;animation-delay:-0.16s"/><circle class="piste" cx="189" cy="231" r="2.0" style="animation-duration:3.91s;animation-delay:-1.26s"/><circle class="piste" cx="141" cy="122" r="1.48" style="animation-duration:4.38s;animation-delay:-4.22s"/><circle class="piste" cx="117" cy="163" r="2.06" style="animation-duration:2.88s;animation-delay:-5.01s"/><circle class="piste" cx="240" cy="357" r="1.58" style="animation-duration:3.94s;animation-delay:-2.24s"/><circle class="piste" cx="227" cy="251" r="2.41" style="animation-duration:3.08s;animation-delay:-4.14s"/><circle class="piste" cx="157" cy="95" r="1.51" style="animation-duration:5.17s;animation-delay:-0.38s"/><circle class="piste" cx="226" cy="409" r="1.95" style="animation-duration:2.76s;animation-delay:-0.25s"/><circle class="piste" cx="174" cy="312" r="1.96" style="animation-duration:4.59s;animation-delay:-3.5s"/><circle class="piste" cx="124" cy="497" r="2.12" style="animation-duration:3.94s;animation-delay:-2.96s"/><circle class="piste" cx="16" cy="568" r="2.41" style="animation-duration:2.63s;animation-delay:-1.55s"/><circle class="piste" cx="230" cy="266" r="2.29" style="animation-duration:3.07s;animation-delay:-2.84s"/><circle class="piste" cx="105" cy="421" r="1.6" style="animation-duration:3.65s;animation-delay:-4.19s"/><circle class="piste" cx="202" cy="174" r="2.47" style="animation-duration:3.93s;animation-delay:-5.12s"/><circle class="piste" cx="114" cy="564" r="2.43" style="animation-duration:4.68s;animation-delay:-1.54s"/><circle class="piste" cx="92" cy="508" r="2.12" style="animation-duration:4.24s;animation-delay:-3.1s"/><circle class="piste" cx="53" cy="443" r="2.37" style="animation-duration:3.91s;animation-delay:-0.09s"/><circle class="piste" cx="115" cy="418" r="2.29" style="animation-duration:3.27s;animation-delay:-0.46s"/><circle class="piste" cx="179" cy="341" r="1.89" style="animation-duration:4.62s;animation-delay:-0.96s"/><circle class="piste" cx="95" cy="495" r="2.23" style="animation-duration:4.93s;animation-delay:-0.62s"/><circle class="piste" cx="164" cy="473" r="1.89" style="animation-duration:4.59s;animation-delay:-1.22s"/><circle class="piste" cx="182" cy="99" r="1.81" style="animation-duration:4.48s;animation-delay:-4.83s"/><circle class="piste" cx="192" cy="191" r="1.83" style="animation-duration:3.82s;animation-delay:-5.14s"/><circle class="piste" cx="180" cy="197" r="1.68" style="animation-duration:4.26s;animation-delay:-1.96s"/><circle class="piste" cx="177" cy="472" r="1.81" style="animation-duration:5.06s;animation-delay:-1.74s"/><circle class="piste" cx="191" cy="430" r="2.04" style="animation-duration:4.32s;animation-delay:-2.24s"/><circle class="piste" cx="95" cy="556" r="2.17" style="animation-duration:3.61s;animation-delay:-0.0s"/><circle class="piste" cx="127" cy="545" r="2.58" style="animation-duration:4.42s;animation-delay:-1.24s"/><circle class="piste" cx="210" cy="426" r="2.29" style="animation-duration:2.66s;animation-delay:-2.0s"/><circle class="piste" cx="68" cy="567" r="1.46" style="animation-duration:3.27s;animation-delay:-3.11s"/><circle class="piste" cx="114" cy="486" r="1.52" style="animation-duration:3.11s;animation-delay:-3.25s"/><circle class="piste" cx="142" cy="429" r="2.06" style="animation-duration:3.25s;animation-delay:-0.49s"/><circle class="piste" cx="168" cy="197" r="2.08" style="animation-duration:3.92s;animation-delay:-0.17s"/><circle class="piste" cx="128" cy="151" r="2.37" style="animation-duration:5.19s;animation-delay:-1.88s"/><circle class="piste" cx="212" cy="411" r="2.31" style="animation-duration:2.8s;animation-delay:-2.09s"/><circle class="piste" cx="218" cy="335" r="1.59" style="animation-duration:2.72s;animation-delay:-0.36s"/><circle class="piste" cx="217" cy="363" r="1.99" style="animation-duration:3.83s;animation-delay:-4.32s"/><circle class="piste" cx="267" cy="454" r="2.53" style="animation-duration:4.19s;animation-delay:-4.9s"/><circle class="piste" cx="249" cy="375" r="2.12" style="animation-duration:3.69s;animation-delay:-2.46s"/><circle class="piste" cx="49" cy="477" r="2.19" style="animation-duration:3.55s;animation-delay:-3.71s"/><circle class="piste" cx="131" cy="466" r="2.26" style="animation-duration:4.06s;animation-delay:-3.73s"/><circle class="piste" cx="240" cy="436" r="1.69" style="animation-duration:3.37s;animation-delay:-5.13s"/><circle class="piste" cx="86" cy="519" r="2.31" style="animation-duration:2.71s;animation-delay:-4.39s"/><circle class="piste" cx="141" cy="272" r="2.3" style="animation-duration:3.61s;animation-delay:-0.53s"/><circle class="piste" cx="135" cy="352" r="2.53" style="animation-duration:2.73s;animation-delay:-0.06s"/><circle class="piste" cx="170" cy="154" r="1.92" style="animation-duration:2.79s;animation-delay:-0.49s"/><circle class="piste" cx="221" cy="446" r="1.69" style="animation-duration:3.84s;animation-delay:-0.14s"/><circle class="piste" cx="124" cy="381" r="2.27" style="animation-duration:3.96s;animation-delay:-0.33s"/><circle class="piste" cx="52" cy="93" r="2.38" style="animation-duration:3.82s;animation-delay:-0.11s"/><circle class="piste" cx="86" cy="401" r="2.15" style="animation-duration:4.17s;animation-delay:-4.6s"/><circle class="piste" cx="92" cy="121" r="1.46" style="animation-duration:3.78s;animation-delay:-4.14s"/><circle class="piste" cx="61" cy="480" r="1.93" style="animation-duration:3.97s;animation-delay:-4.55s"/><circle class="piste" cx="84" cy="445" r="1.71" style="animation-duration:4.34s;animation-delay:-2.83s"/><circle class="piste" cx="206" cy="528" r="2.33" style="animation-duration:4.11s;animation-delay:-3.02s"/><circle class="piste" cx="210" cy="166" r="2.54" style="animation-duration:3.98s;animation-delay:-0.01s"/><circle class="piste" cx="163" cy="488" r="1.54" style="animation-duration:4.51s;animation-delay:-3.96s"/><circle class="piste" cx="197" cy="223" r="2.15" style="animation-duration:4.92s;animation-delay:-1.12s"/><circle class="piste" cx="135" cy="85" r="2.22" style="animation-duration:3.53s;animation-delay:-3.79s"/><circle class="piste" cx="105" cy="183" r="2.16" style="animation-duration:4.07s;animation-delay:-2.12s"/><circle class="piste" cx="145" cy="177" r="1.7" style="animation-duration:4.56s;animation-delay:-4.21s"/><circle class="piste" cx="142" cy="541" r="2.45" style="animation-duration:5.15s;animation-delay:-0.44s"/><circle class="piste" cx="132" cy="450" r="1.73" style="animation-duration:2.7s;animation-delay:-4.88s"/><circle class="piste" cx="110" cy="474" r="1.52" style="animation-duration:3.71s;animation-delay:-1.96s"/><circle class="piste" cx="238" cy="342" r="1.5" style="animation-duration:4.01s;animation-delay:-4.82s"/><circle class="piste" cx="41" cy="429" r="2.16" style="animation-duration:4.36s;animation-delay:-2.34s"/><circle class="piste" cx="48" cy="467" r="1.65" style="animation-duration:3.57s;animation-delay:-2.71s"/><circle class="piste" cx="209" cy="317" r="2.41" style="animation-duration:3.49s;animation-delay:-1.33s"/><circle class="piste" cx="183" cy="305" r="2.37" style="animation-duration:2.79s;animation-delay:-4.58s"/><circle class="piste" cx="199" cy="144" r="1.66" style="animation-duration:4.22s;animation-delay:-1.2s"/><circle class="piste" cx="197" cy="503" r="2.37" style="animation-duration:3.7s;animation-delay:-3.86s"/><circle class="piste" cx="159" cy="262" r="2.59" style="animation-duration:3.56s;animation-delay:-1.8s"/><circle class="piste" cx="127" cy="330" r="2.3" style="animation-duration:3.45s;animation-delay:-2.35s"/><circle class="piste" cx="116" cy="330" r="1.84" style="animation-duration:4.99s;animation-delay:-2.98s"/><circle class="piste" cx="136" cy="511" r="1.49" style="animation-duration:2.85s;animation-delay:-0.65s"/><circle class="piste" cx="204" cy="305" r="1.98" style="animation-duration:2.82s;animation-delay:-2.27s"/><circle class="piste" cx="217" cy="282" r="2.33" style="animation-duration:4.38s;animation-delay:-3.65s"/><circle class="piste" cx="71" cy="469" r="2.19" style="animation-duration:2.8s;animation-delay:-4.09s"/></g>
+      </svg>
+    </div>
+  <div class="veil"></div>
+</div>
+
+<div class="app">
+
+  <div class="bar">
+    <div class="logo">
+      <svg viewBox="0 0 24 24"><path d="M12 3 2 11h3v9h6v-6h2v6h6v-9h3L12 3z"/></svg>
+    </div>
+    <b>OfferHut.fi</b>
+    <select class="kieli" id="kieli" aria-label="Kieli">
+      <option value="fi">SUOMI</option>
+      <option value="sv">SVENSKA</option>
+      <option value="en">ENGLISH</option>
+      <option value="de">DEUTSCH</option>
+      <option value="fr">FRANÇAIS</option>
+    </select>
+  </div>
+
+  <!-- 1. разговор -->
+  <section id="vaihe1">
+    <div class="hero tyhja" id="hero">
+      <p class="laskuri" id="laskuri"></p>
+      <div class="railwrap" id="railwrap">
+        <button class="nav prev" id="prev" type="button" aria-label="Seuraava">&#8249;</button>
+        <button class="nav next" id="next" type="button" aria-label="Edellinen">&#8250;</button>
+        <!-- РЕЗУЛЬТАТ ПОИСКА. Пусто, пока агент не собрал четыре
+             параметра и не прошёл поиск. -->
+        <div class="rail" id="rail"></div>
+      </div>
+    </div>
+
+    <!-- Текущий вопрос агента. Один, сменяется. Разговор — внутри рамки. -->
+    <p class="kysymys" id="kysymys"></p>
+    <div class="dock" id="dock">
+          <div class="mrow">
+        <div class="inp">
+          <!-- Лента разговора: вопрос агента и ответ гостя. Прокручивается,
+               старое уходит вверх. -->
+          <div class="loki" id="puhelu"></div>
+          <textarea class="say" id="say" rows="2" placeholder="Pidä nappia pohjassa ja puhu — tai kirjoita"></textarea>
+          <button class="send" id="send" aria-label="Lähetä">&#8593;</button>
+        </div>
+        <button class="mic" id="mic" aria-label="Puhu">
+          <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+        </button>
+      </div>
+      <p class="st" id="st"></p>
+    </div>
+
+    <div class="ehdot" id="ehdot"></div>
+
+    <!-- Новый поиск. Показывается только когда результат уже есть:
+         до него сбрасывать нечего. -->
+    <p class="uusi hide" id="uusiRivi">
+      <button class="link" id="uusiHaku" type="button">Uusi haku</button>
+    </p>
+  </section>
+
+  <!-- 2. карточка объекта: сюда проваливается нажатие на фото в галерее -->
+  <section id="vaihe2" class="hide">
+    <p class="takaisin">
+      <button class="btn ghost" id="takaisin" type="button">&#8249; Takaisin hakutuloksiin</button>
+    </p>
+    <div class="cards">
+      <div class="card" id="kortti"></div>
+    </div>
+    <div class="field"><button class="btn wide" id="toLisat">Varaa</button></div>
+  </section>
+
+  <!-- 3. допы -->
+  <section id="vaihe3" class="hide">
+    <h2>Lisää varaukseen</h2>
+    <p class="lead">Valitse mitä haluat mukaan.</p>
+    <div class="lisat" id="lisat" style="margin-top:12px"></div>
+    <div class="total" id="total"></div>
+    <div class="field" style="margin-top:18px"><button class="btn wide" id="toForm">Jatka varaukseen</button></div>
+  </section>
+
+  <!-- 4. данные гостя -->
+  <section id="vaihe4" class="hide">
+    <h2>Varaajan tiedot</h2>
+    <div class="field"><span class="lbl">Nimi</span><input id="fName" autocomplete="name" placeholder="Etunimi Sukunimi"></div>
+    <div class="field"><span class="lbl">Sähköposti</span><input id="fMail" type="email" inputmode="email" autocomplete="email" placeholder="nimi@esimerkki.fi"></div>
+    <div class="field"><span class="lbl">Puhelin</span><input id="fTel" inputmode="tel" autocomplete="tel" placeholder="+358…"></div>
+    <div class="total" id="total2"></div>
+    <div class="field" style="margin-top:18px"><button class="btn wide" id="pay">Maksuun</button></div>
+    <p class="hint">Täytetään puheesta, jos kerroit ne jo.</p>
+  </section>
+
+  <!-- 5. готово -->
+  <section id="vaihe5" class="hide">
+    <div class="ok">
+      <div class="tick">&#10003;</div>
+      <h3>Varaus vahvistettu</h3>
+      <p id="okRivi"></p>
+      <p id="okSumma" style="color:var(--ink); font-weight:700; font-size:21px; margin-top:14px"></p>
+      <p style="margin-top:24px"><button class="btn ghost" id="restart">Uusi haku</button></p>
+    </div>
+  </section>
+
+</div>
+
+
+<script>
+(function(){
+  "use strict";
+
+  /* Адрес воркера. Свой, не хорековский. */
+  var API = "https://offerhut-varaus.carbo-lignum.workers.dev";
+
+  /* ЗАГЛУШКА: поиск по базе сайта. Сейчас у offerhut.fi эндпоинта нет —
+     фильтр /offers/ отдаёт целую страницу HTML, не JSON. Когда появится,
+     сюда встанет его адрес, и etsi() пойдёт за данными туда. */
+  var HAE_URL = "";
+
+  /* Простыня уточнений заказчика ложится сюда. Добавить уточнение = одна
+     строка здесь и такая же в списке в промпте воркера. Больше нигде.
+       kysy:true — без этого не ищем */
+  /* Снято со страницы объекта offerhut.fi: словарь BX.message, 98 ключей.
+     Это и есть та простыня уточнений. Агент спрашивает только kysy:true,
+     остальное берёт, если гость сказал сам. */
+  var KRITEERIT = [
+    // без этого не ищем
+    { id:"saapuminen",  nayta:"Saapuu",    kysy:true  },
+    { id:"lahto",       nayta:"Lähtee",    kysy:true  },
+    { id:"aikuiset",    nayta:"Aikuiset",  kysy:true  },
+    { id:"budjetti",    nayta:"Budjetti",  kysy:true  },
+    // состав группы: цена считается по нему, лишний человек платный
+    { id:"lapset",      nayta:"Lapset",    kysy:false },   // alle 12v
+    { id:"pikkulapset", nayta:"Alle 2v",   kysy:false },
+    { id:"henkiloa",    nayta:"",          kysy:false },   // сумма, считается сама
+    // питомцы: на сайте разбиты по размеру, цена у каждого своя
+    { id:"koira_s",     nayta:"Koira <25", kysy:false },
+    { id:"koira_m",     nayta:"Koira <40", kysy:false },
+    { id:"koira_l",     nayta:"Koira >40", kysy:false },
+    { id:"kissa",       nayta:"Kissa",     kysy:false },
+    { id:"muu_lemmikki",nayta:"Lemmikki",  kysy:false },
+    // где и что
+    { id:"alue",        nayta:"Alue",      kysy:false },
+    { id:"savusauna",   nayta:"Savusauna", kysy:false },
+    { id:"palju",       nayta:"Palju",     kysy:false },
+    { id:"poreallas",   nayta:"Poreallas", kysy:false },
+    { id:"vene",        nayta:"Vene",      kysy:false },
+    { id:"kalastus",    nayta:"Kalastus",  kysy:false },
+    // время приезда и отъезда: на сайте платные опции
+    { id:"aikainen_tulo",   nayta:"Aikainen tulo",  kysy:false },
+    { id:"myohainen_tulo",  nayta:"Myöhäinen tulo", kysy:false },
+    { id:"myohainen_lahto", nayta:"Myöhäinen lähtö",kysy:false },
+    { id:"muuta",       nayta:"",          kysy:false }
+  ];
+
+  /* ЗАГЛУШКА: объекты. Заказчик пришлёт 3-4 с параметрами. Поля названы так,
+     как их должен отдавать будущий эндпоинт поиска. */
+  var OBJEKTIT = [
+    { id:"o1", nimi:"0131 Välisesonki alk 7 vrk", alue:"Pohjois-Karjala",
+      makuuhuoneet:3, vuodepaikat:8, wc:2, hinta_vrk:100, hinta_vko:630,
+      ale:0, varustus:["sauna"], kuva:"img/g1.jpg", url:"" },
+    { id:"o2", nimi:"0043 Pääsiäinen alk 2 vrk", alue:"Pohjois-Karjala",
+      makuuhuoneet:3, vuodepaikat:8, wc:2, hinta_vrk:108, hinta_vko:680,
+      ale:18, varustus:["sauna","vene"], kuva:"img/g2.jpg", url:"" },
+    { id:"o3", nimi:"0088 Kesäviikko alk 7 vrk", alue:"Etelä-Savo",
+      makuuhuoneet:4, vuodepaikat:10, wc:2, hinta_vrk:160, hinta_vko:980,
+      ale:0, varustus:["sauna","vene","palju"], kuva:"img/g3.jpg", url:"" },
+    { id:"o4", nimi:"0205 Talviloma alk 3 vrk", alue:"Lappi",
+      makuuhuoneet:2, vuodepaikat:6, wc:1, hinta_vrk:135, hinta_vko:820,
+      ale:12, varustus:["sauna","palju"], kuva:"img/g4.jpg", url:"" }
+  ];
+
+  /* Доп. услуги — полный список со страницы объекта offerhut.fi.
+     ЦЕНЫ ЗАГЛУШЕЧНЫЕ: на сайте они свои у каждого объекта и приходят
+     вместе с ним. Когда появится эндпоинт, этот список заменится тем,
+     что отдаст поле lisapalvelut.
+       per: "varaus" за бронь, "hlo" за человека, "vrk" за сутки,
+            "paikalla" — платится владельцу на месте, сумму мы не берём */
+  var LISAT = [
+    // проживание
+    { r:"r_majoitus",  id:"liinavaatteet", nimi:"Liinavaatteet", alt:"Setti yhdelle: tyynyliina, pussilakana, lakana, pyyhkeet", hinta:18, per:"hlo" },
+    { r:"r_majoitus",  id:"loppusiivous",  nimi:"Loppusiivous",  alt:"Lähtösiivous tehtynä",      hinta:95,  per:"varaus" },
+    { r:"r_majoitus",  id:"polttopuut",    nimi:"Polttopuut",    alt:"Säkki",                     hinta:25,  per:"varaus" },
+    { r:"r_majoitus",  id:"internet",      nimi:"Internetyhteys",alt:"",                          hinta:0,   per:"varaus" },
+    { r:"r_majoitus",  id:"aikainen_tulo", nimi:"Aikainen tulo", alt:"Sallittu alk. klo",         hinta:40,  per:"varaus" },
+    { r:"r_majoitus",  id:"myohainen_tulo",nimi:"Myöhäinen tulo",alt:"Sallittu viimeisin klo",    hinta:40,  per:"varaus" },
+    { r:"r_majoitus",  id:"myohainen_lahto",nimi:"Myöhäinen lähtö",alt:"",                        hinta:40,  per:"varaus" },
+    // баня и отдых
+    { r:"r_sauna", id:"palju",     nimi:"Palju",        alt:"Lämmitettynä tuloon",       hinta:120, per:"varaus" },
+    { r:"r_sauna", id:"poreallas", nimi:"Poreallas",    alt:"",                          hinta:90,  per:"varaus" },
+    { r:"r_sauna", id:"savusauna", nimi:"Savusauna",    alt:"Lämmitys",                  hinta:150, per:"varaus" },
+    { r:"r_sauna", id:"grilli",    nimi:"Grillivälineet",alt:"",                         hinta:20,  per:"varaus" },
+    // на воде
+    { r:"r_vesi",   id:"soutuvene",     nimi:"Soutuvene",     alt:"Airot mukana",              hinta:45,  per:"varaus" },
+    { r:"r_vesi",   id:"lisavene",      nimi:"Lisä-soutuvene",alt:"",                          hinta:45,  per:"varaus" },
+    { r:"r_vesi",   id:"peramoottori",  nimi:"Perämoottori",  alt:"Benssa lisämaksulla",       hinta:120, per:"varaus" },
+    { r:"r_vesi",   id:"kanootti",      nimi:"Kanootti",      alt:"",                          hinta:60,  per:"varaus" },
+    { r:"r_vesi",   id:"kajakki",       nimi:"Kajakki",       alt:"",                          hinta:60,  per:"varaus" },
+    { r:"r_vesi",   id:"sup",           nimi:"SUP lauta",     alt:"",                          hinta:50,  per:"varaus" },
+    { r:"r_vesi",   id:"pelastusliivit",nimi:"Pelastusliivit",alt:"",                          hinta:10,  per:"hlo" },
+    // рыбалка
+    { r:"r_kala",  id:"kalastusvalineet",nimi:"Kalastusvälineet ja -luvat", alt:"",            hinta:55,  per:"varaus" },
+    { r:"r_kala",  id:"onki",          nimi:"Onki",          alt:"",                          hinta:12,  per:"varaus" },
+    { r:"r_kala",  id:"virveli",       nimi:"Virveli",       alt:"",                          hinta:20,  per:"varaus" },
+    { r:"r_kala",  id:"verkko",        nimi:"Kalastusverkko",alt:"1 verkko + 1 lupa",         hinta:35,  per:"varaus" },
+    { r:"r_kala",  id:"katiska",       nimi:"Katiska",       alt:"",                          hinta:25,  per:"varaus" },
+    { r:"r_kala",  id:"ravustus",      nimi:"Ravustus",      alt:"1 rapuverkko + 1 lupa",     hinta:35,  per:"varaus" },
+    { r:"r_kala",  id:"madot",         nimi:"Madot",         alt:"",                          hinta:8,   per:"varaus" },
+    { r:"r_kala",  id:"kalahaavi",     nimi:"Kalahaavi",     alt:"",                          hinta:10,  per:"varaus" },
+    { r:"r_kala",  id:"savustin",      nimi:"Savustin",      alt:"",                          hinta:25,  per:"varaus" },
+    { r:"r_kala",  id:"kaira",         nimi:"Kaira",         alt:"Jääkaira",                  hinta:25,  per:"varaus" },
+    // с детьми
+    { r:"r_lapset",  id:"pinnasanky",    nimi:"Pinnasänky",    alt:"",                          hinta:20,  per:"varaus" },
+    { r:"r_lapset",  id:"syottotuoli",   nimi:"Syöttötuoli",   alt:"",                          hinta:15,  per:"varaus" },
+    { r:"r_lapset",  id:"trampoliini",   nimi:"Trampoliini",   alt:"",                          hinta:45,  per:"varaus" },
+    // прочее
+    { r:"r_muut",      id:"joulukuusi",    nimi:"Aito joulukuusi",alt:"",                         hinta:45,  per:"varaus" },
+    { r:"r_muut",      id:"kuljetus",      nimi:"Kuljetus",      alt:"Meno-paluu",                hinta:0,   per:"paikalla" }
+  ];
+
+  /* Правила цены, снятые со страницы объекта. Пока только показываем
+     предупреждение — расчёт придёт с эндпоинта вместе с объектом. */
+  var SAANNOT = {
+    yliryhma:  "Ryhmän koko ylittää tarjoukseen sisältyvän henkilömäärän. Hintaan lisätään maksu lisähenkilöstä.",
+    epasaann:  "Epäsäännöllinen tulo- tai lähtöpäivä. Vuokrahinta lasketaan lähimmän säännöllisen päivän mukaan.",
+    lyhyt:     "Valittu ajanjakso on tarjousta lyhyempi. Hinta lasketaan säännölliselle ajanjaksolle.",
+    paikalla:  "Hinta ja ehdot neuvotellaan vuokranantajan kanssa. OfferHut ei vastaa tästä palvelusta."
+  };
+
+  /* Четыре параметра, с которых начинается поиск — те же, что в форме
+     на offerhut.fi: период, регион, цена от и до, число гостей.
+     Пока на параметр не ответили, он подсвечен. */
+  var EHDOT = [
+    { id:"aika",    nimi:"e_aika",  tyhja:"t_aika",
+      arvo:function(){
+        var a = tila.kriteerit.saapuminen, b = tila.kriteerit.lahto;
+        if (!a) return "";
+        return suomiPvm(a) + (b ? " – " + suomiPvm(b) : " – ?");
+      },
+      valmis:function(){ return !!(tila.kriteerit.saapuminen && tila.kriteerit.lahto); } },
+    { id:"alue",    nimi:"e_alue",  tyhja:"t_alue",
+      arvo:function(){ return tila.kriteerit.alue || ""; },
+      valmis:function(){ return !!tila.kriteerit.alue; } },
+    { id:"hinta",   nimi:"e_hinta", tyhja:"t_hinta",
+      arvo:function(){
+        var a = tila.kriteerit.hinta_min, b = tila.kriteerit.hinta_max;
+        if (!a && !b) return "";
+        return (a || "0") + " – " + (b || "?") + " €";
+      },
+      valmis:function(){ return !!(tila.kriteerit.hinta_min || tila.kriteerit.hinta_max); } },
+    { id:"vieraat", nimi:"e_vieraat", tyhja:"t_vieraat",
+      arvo:function(){
+        var a = parseInt(tila.kriteerit.aikuiset, 10) || 0;
+        var l = parseInt(tila.kriteerit.lapset, 10) || 0;
+        if (!a && !l) return "";
+        return a + " aik" + (l ? " + " + l + " lasta" : "");
+      },
+      valmis:function(){ return !!henkilomaara(); } }
+  ];
+
+
+  /* ПЕРЕВОД ИНТЕРФЕЙСА. Язык выбирается в шапке и меняет всё меню.
+     Названия доп. услуг сюда не входят: они приходят с объектом
+     с сайта и переводятся на его стороне. */
+  var TEKSTIT = {
+    fi: {
+      ph:"Pidä nappia pohjassa ja puhu — tai kirjoita",
+      hakutulos:"Hakutulos", kysymys:"Kysymys",
+      e_aika:"Ajankohta", e_alue:"Alue", e_hinta:"Hinta /vrk", e_vieraat:"Vieraat",
+      t_aika:"pp.kk. – pp.kk.", t_alue:"koko Suomi", t_hinta:"mistä – mihin", t_vieraat:"kuinka monta",
+      o_mokit:"Sopivat mökit", o_lisat:"Lisää varaukseen", o_tiedot:"Varaajan tiedot",
+      vihje:"Sano “ensimmäinen” tai “halvempi” — tai valitse napilla.",
+      b_valitse:"Valitse", b_jatka:"Jatka varaukseen", b_maksuun:"Maksuun", b_uusi:"Uusi haku",
+      l_nimi:"Nimi", l_posti:"Sähköposti", l_puhelin:"Puhelin",
+      vahvistettu:"Varaus vahvistettu", yhteensa:"Yhteensä", sisaltyy:"sisältyy",
+      paikalla:"paikan päällä", veloituksetta:"veloituksetta",
+      s_kuuntelen:"Kuuntelen", s_valmis:"irrota kun olet valmis", s_kasittelen:"Käsittelen…",
+      s_lyhyt:"Liian lyhyt. Pidä nappia pohjassa ja puhu.",
+      s_ei_tue:"Selaimesi ei tue äänitallennusta. Kirjoita tähän.",
+      s_salli:"Salli mikrofoni selaimen asetuksista.",
+      s_virhe:"Äänen käsittely ei onnistunut. Kirjoita tähän.",
+      yhteys:"Yhteys katkesi. Kokeile uudelleen.",
+      ei_osumia:"Ei sopivia kohteita. Kerro toiset päivät tai budjetti.",
+      yota:"yötä", hlo:"hlö", kohdetta:"kohdetta",
+      r_majoitus:"Majoitus", r_sauna:"Sauna ja palju", r_vesi:"Vesillä",
+      r_kala:"Kalastus", r_lapset:"Lapsille", r_muut:"Muut",
+      b_takaisin:"‹ Takaisin hakutuloksiin", b_varaa:"Varaa",
+      k_mh:"makuuhuonetta", k_vuodepaikkaa:"vuodepaikkaa", k_wc:"wc",
+      p_vrk:"/vrk", p_vko:"/vko", sisaltyy_hintaan:"Hintaan sisältyy",
+      v_sauna:"Sauna", v_vene:"Vene", v_palju:"Palju",
+      vihje_muuta:"Voit muuttaa hakuehtoja puhumalla — sano vain."
+    },
+    sv: {
+      ph:"Håll knappen intryckt och tala — eller skriv",
+      hakutulos:"Sökresultat", kysymys:"Fråga",
+      e_aika:"Tidpunkt", e_alue:"Område", e_hinta:"Pris /dygn", e_vieraat:"Gäster",
+      t_aika:"dd.mm. – dd.mm.", t_alue:"hela Finland", t_hinta:"från – till", t_vieraat:"hur många",
+      o_mokit:"Lämpliga stugor", o_lisat:"Lägg till bokningen", o_tiedot:"Bokarens uppgifter",
+      vihje:"Säg ”den första” eller ”billigare” — eller välj med knappen.",
+      b_valitse:"Välj", b_jatka:"Fortsätt till bokning", b_maksuun:"Till betalning", b_uusi:"Ny sökning",
+      l_nimi:"Namn", l_posti:"E-post", l_puhelin:"Telefon",
+      vahvistettu:"Bokningen bekräftad", yhteensa:"Totalt", sisaltyy:"ingår",
+      paikalla:"på plats", veloituksetta:"utan avgift",
+      s_kuuntelen:"Lyssnar", s_valmis:"släpp när du är klar", s_kasittelen:"Bearbetar…",
+      s_lyhyt:"För kort. Håll knappen intryckt och tala.",
+      s_ei_tue:"Din webbläsare stöder inte ljudinspelning. Skriv här.",
+      s_salli:"Tillåt mikrofonen i webbläsarens inställningar.",
+      s_virhe:"Ljudet kunde inte behandlas. Skriv här.",
+      yhteys:"Anslutningen bröts. Försök igen.",
+      ei_osumia:"Inga lämpliga objekt. Ange andra datum eller budget.",
+      yota:"nätter", hlo:"pers", kohdetta:"objekt",
+      r_majoitus:"Boende", r_sauna:"Bastu och badtunna", r_vesi:"På vattnet",
+      r_kala:"Fiske", r_lapset:"För barn", r_muut:"Övrigt",
+      b_takaisin:"‹ Tillbaka till sökresultatet", b_varaa:"Boka",
+      k_mh:"sovrum", k_vuodepaikkaa:"bäddar", k_wc:"wc",
+      p_vrk:"/dygn", p_vko:"/vecka", sisaltyy_hintaan:"Ingår i priset",
+      v_sauna:"Bastu", v_vene:"Båt", v_palju:"Badtunna",
+      vihje_muuta:"Du kan ändra sökvillkoren genom att tala — säg bara till."
+    },
+    en: {
+      ph:"Hold the button and speak — or type",
+      hakutulos:"Search result", kysymys:"Question",
+      e_aika:"Dates", e_alue:"Area", e_hinta:"Price /night", e_vieraat:"Guests",
+      t_aika:"dd.mm. – dd.mm.", t_alue:"all Finland", t_hinta:"from – to", t_vieraat:"how many",
+      o_mokit:"Matching cottages", o_lisat:"Add to booking", o_tiedot:"Your details",
+      vihje:"Say “the first” or “cheaper” — or pick with the button.",
+      b_valitse:"Choose", b_jatka:"Continue to booking", b_maksuun:"To payment", b_uusi:"New search",
+      l_nimi:"Name", l_posti:"Email", l_puhelin:"Phone",
+      vahvistettu:"Booking confirmed", yhteensa:"Total", sisaltyy:"included",
+      paikalla:"paid on site", veloituksetta:"free of charge",
+      s_kuuntelen:"Listening", s_valmis:"release when ready", s_kasittelen:"Processing…",
+      s_lyhyt:"Too short. Hold the button and speak.",
+      s_ei_tue:"Your browser does not support recording. Type here.",
+      s_salli:"Allow the microphone in your browser settings.",
+      s_virhe:"Could not process the audio. Type here.",
+      yhteys:"Connection lost. Try again.",
+      ei_osumia:"No matching cottages. Try other dates or budget.",
+      yota:"nights", hlo:"guests", kohdetta:"cottages",
+      r_majoitus:"Accommodation", r_sauna:"Sauna and hot tub", r_vesi:"On the water",
+      r_kala:"Fishing", r_lapset:"For children", r_muut:"Other",
+      b_takaisin:"‹ Back to results", b_varaa:"Book",
+      k_mh:"bedrooms", k_vuodepaikkaa:"beds", k_wc:"wc",
+      p_vrk:"/night", p_vko:"/week", sisaltyy_hintaan:"Included in the price",
+      v_sauna:"Sauna", v_vene:"Boat", v_palju:"Hot tub",
+      vihje_muuta:"You can change the search by speaking — just say it."
+    },
+    de: {
+      ph:"Taste gedrückt halten und sprechen — oder tippen",
+      hakutulos:"Suchergebnis", kysymys:"Frage",
+      e_aika:"Zeitraum", e_alue:"Gebiet", e_hinta:"Preis /Nacht", e_vieraat:"Gäste",
+      t_aika:"TT.MM. – TT.MM.", t_alue:"ganz Finnland", t_hinta:"von – bis", t_vieraat:"wie viele",
+      o_mokit:"Passende Hütten", o_lisat:"Zur Buchung hinzufügen", o_tiedot:"Ihre Angaben",
+      vihje:"Sagen Sie „die erste“ oder „günstiger“ — oder wählen Sie per Taste.",
+      b_valitse:"Wählen", b_jatka:"Weiter zur Buchung", b_maksuun:"Zur Zahlung", b_uusi:"Neue Suche",
+      l_nimi:"Name", l_posti:"E-Mail", l_puhelin:"Telefon",
+      vahvistettu:"Buchung bestätigt", yhteensa:"Gesamt", sisaltyy:"inbegriffen",
+      paikalla:"vor Ort zu zahlen", veloituksetta:"kostenlos",
+      s_kuuntelen:"Ich höre zu", s_valmis:"loslassen, wenn fertig", s_kasittelen:"Verarbeite…",
+      s_lyhyt:"Zu kurz. Taste halten und sprechen.",
+      s_ei_tue:"Ihr Browser unterstützt keine Aufnahme. Bitte tippen.",
+      s_salli:"Mikrofon in den Browsereinstellungen erlauben.",
+      s_virhe:"Audio konnte nicht verarbeitet werden. Bitte tippen.",
+      yhteys:"Verbindung unterbrochen. Erneut versuchen.",
+      ei_osumia:"Keine passenden Hütten. Andere Daten oder Budget nennen.",
+      yota:"Nächte", hlo:"Pers.", kohdetta:"Hütten",
+      r_majoitus:"Unterkunft", r_sauna:"Sauna und Hot Tub", r_vesi:"Auf dem Wasser",
+      r_kala:"Angeln", r_lapset:"Für Kinder", r_muut:"Sonstiges",
+      b_takaisin:"‹ Zurück zum Suchergebnis", b_varaa:"Buchen",
+      k_mh:"Schlafzimmer", k_vuodepaikkaa:"Betten", k_wc:"WC",
+      p_vrk:"/Nacht", p_vko:"/Woche", sisaltyy_hintaan:"Im Preis enthalten",
+      v_sauna:"Sauna", v_vene:"Boot", v_palju:"Hot Tub",
+      vihje_muuta:"Sie können die Suche per Sprache ändern — sagen Sie es einfach."
+    },
+    fr: {
+      ph:"Maintenez le bouton et parlez — ou écrivez",
+      hakutulos:"Résultat", kysymys:"Question",
+      e_aika:"Dates", e_alue:"Région", e_hinta:"Prix /nuit", e_vieraat:"Voyageurs",
+      t_aika:"jj.mm. – jj.mm.", t_alue:"toute la Finlande", t_hinta:"de – à", t_vieraat:"combien",
+      o_mokit:"Chalets correspondants", o_lisat:"Ajouter à la réservation", o_tiedot:"Vos coordonnées",
+      vihje:"Dites « le premier » ou « moins cher » — ou choisissez au bouton.",
+      b_valitse:"Choisir", b_jatka:"Continuer la réservation", b_maksuun:"Vers le paiement", b_uusi:"Nouvelle recherche",
+      l_nimi:"Nom", l_posti:"E-mail", l_puhelin:"Téléphone",
+      vahvistettu:"Réservation confirmée", yhteensa:"Total", sisaltyy:"inclus",
+      paikalla:"à régler sur place", veloituksetta:"sans frais",
+      s_kuuntelen:"J’écoute", s_valmis:"relâchez quand c’est fini", s_kasittelen:"Traitement…",
+      s_lyhyt:"Trop court. Maintenez le bouton et parlez.",
+      s_ei_tue:"Votre navigateur ne gère pas l’enregistrement. Écrivez ici.",
+      s_salli:"Autorisez le micro dans les réglages du navigateur.",
+      s_virhe:"Impossible de traiter l’audio. Écrivez ici.",
+      yhteys:"Connexion perdue. Réessayez.",
+      ei_osumia:"Aucun chalet correspondant. Donnez d’autres dates ou budget.",
+      yota:"nuits", hlo:"pers", kohdetta:"chalets",
+      r_majoitus:"Hébergement", r_sauna:"Sauna et bain nordique", r_vesi:"Sur l’eau",
+      r_kala:"Pêche", r_lapset:"Pour les enfants", r_muut:"Autres",
+      b_takaisin:"‹ Retour aux résultats", b_varaa:"Réserver",
+      k_mh:"chambres", k_vuodepaikkaa:"couchages", k_wc:"wc",
+      p_vrk:"/nuit", p_vko:"/semaine", sisaltyy_hintaan:"Inclus dans le prix",
+      v_sauna:"Sauna", v_vene:"Bateau", v_palju:"Bain nordique",
+      vihje_muuta:"Vous pouvez modifier la recherche en parlant — dites-le simplement."
+    }
+  };
+
+  var kieli = "fi";
+  function T(avain){
+    var s = TEKSTIT[kieli] && TEKSTIT[kieli][avain];
+    return s || TEKSTIT.fi[avain] || "";
+  }
+
+  /* Перерисовывает весь интерфейс на выбранном языке. */
+  /* «Держите кнопку и говорите» — подсказка на один раз: объяснить, как
+     этим пользуются. Человек ответил — он уже знает, и надпись уходит
+     насовсем, в том числе при смене языка. */
+  var opastettu = false;
+  function opastusPois(){
+    opastettu = true;
+    var say = el("say");
+    if (say) say.setAttribute("placeholder", "");
+  }
+
+  function kaanna(){
+    var say = el("say");
+    if (say) say.setAttribute("placeholder", opastettu ? "" : T("ph"));
+    var parit = [
+      ["o_lisat","#vaihe3 h2"], ["o_tiedot","#vaihe4 h2"],
+      ["b_takaisin","#takaisin"], ["b_varaa","#toLisat"],
+      ["b_jatka","#toForm"], ["b_maksuun","#pay"],
+      ["b_uusi","#restart"], ["b_uusi","#uusiHaku"], ["vahvistettu","#vaihe5 h3"]
+    ];
+    parit.forEach(function(p){
+      var n = document.querySelector(p[1]);
+      if (n) n.textContent = T(p[0]);
+    });
+    var lbl = document.querySelectorAll("#vaihe4 .lbl");
+    var avaimet = ["l_nimi","l_posti","l_puhelin"];
+    for (var i = 0; i < lbl.length && i < 3; i++) lbl[i].textContent = T(avaimet[i]);
+    // Подпись у текущего вопроса тоже на новом языке: номер внутри
+    // сохраняем, меняем только слово.
+    var merkit = document.querySelectorAll("#kysymys .merkki");
+    for (var m = 0; m < merkit.length; m++) {
+      var nro = merkit[m].querySelector("b");
+      merkit[m].innerHTML = T("kysymys") + "<b>" + (nro ? nro.textContent : "") + "</b>";
+    }
+    if (typeof paivitaRail === "function") paivitaRail();
+    piirraEhdot();
+    if (tila.valittu) { piirraKortti(); piirraLisat(); }
+    if (tila.ehdokkaat.length) piirraKortit();
+  }
+
+  var tila = { kriteerit:{}, historia:[], ehdokkaat:[], valittu:null, lisat:{}, asiakas:{}, vaihe:1 };
+  var el = function(id){ return document.getElementById(id); };
+  function eur(x){ return (Math.round(x*100)/100).toFixed(2).replace(".",",")+" €"; }
+  function eurLyhyt(x){ return Math.round(x) + " €"; }
+
+  /* ---------- экраны ---------- */
+  function vaihe(n){
+    tila.vaihe = n;
+    [1,2,3,4,5].forEach(function(i){
+      var s = el("vaihe"+i); if (s) s.classList.toggle("hide", i !== n);
+    });
+    // Фото держим только на первом экране: дальше идут цифры и поля,
+    // их читают на белом.
+    document.body.classList.toggle("foto", n === 1);
+    el("shot").style.display = (n === 1) ? "" : "none";
+    el("dock").classList.toggle("hide", n === 5);
+    window.scrollTo(0,0);
+  }
+
+  /* Вопрос агента попадает в два места сразу: над панелью — ТЕКУЩИЙ, он
+     там сменяется; и строкой в ленту внутри рамки ввода, где разговор
+     копится и прокручивается. Ответ гостя идёт только в ленту. */
+  function puhu(kuka, teksti, odota){
+    var lista = el("puhelu"), ylin = el("kysymys");
+
+    function lisaa(luokka){
+      if (!lista) return;
+      var d = document.createElement("div");
+      d.className = luokka;
+      d.textContent = teksti;
+      lista.appendChild(d);
+      lista.scrollTop = lista.scrollHeight;
+    }
+
+    if (kuka === "me") { lisaa("a"); return { remove:function(){} }; }
+
+    if (odota) {
+      // Ожидание висит только наверху: в ленте от него остался бы мусор.
+      var vanha = ylin ? { html: ylin.innerHTML, cls: ylin.className } : null;
+      if (ylin) { ylin.className = "kysymys wait"; ylin.textContent = teksti; }
+      return { remove:function(){
+        // Если ответ не пришёл и вопрос никто не сменил — возвращаем прежний.
+        if (ylin && vanha && ylin.classList.contains("wait")) {
+          ylin.className = vanha.cls;
+          ylin.innerHTML = vanha.html;
+        }
+      } };
+    }
+
+    if (ylin) {
+      ylin.className = "kysymys";
+      ylin.innerHTML = '<span class="merkki">' + T("kysymys") + "<b>" + numero() + "</b></span><span></span>";
+      ylin.lastChild.textContent = teksti;
+    }
+    lisaa("q");
+    return { remove:function(){} };
+  }
+
+  /* Номер вопроса считается по тем же четырём параметрам поиска. */
+  function numero(){
+    var tehty = EHDOT.filter(function(x){ return x.valmis(); }).length;
+    return Math.min(tehty + 1, EHDOT.length) + "/" + EHDOT.length;
+  }
+
+  /* Подсвечен тот параметр, который спрашивают сейчас — первый незакрытый. */
+  function kysyttava(){
+    for (var i = 0; i < EHDOT.length; i++) if (!EHDOT[i].valmis()) return EHDOT[i].id;
+    return "";
+  }
+
+  function piirraEhdot(){
+    var e = el("ehdot");
+    if (!e) return;
+    var nyt = kysyttava();
+    e.innerHTML = EHDOT.map(function(x){
+      var v = x.arvo();
+      var luokka = "ehto" + (v ? "" : " auki") + (x.id === nyt ? " kysytaan" : "");
+      return '<div class="' + luokka + '">' +
+               '<span class="nimi">' + T(x.nimi) + '</span>' +
+               '<span class="arvo">' + (v || T(x.tyhja)) + '</span>' +
+             '</div>';
+    }).join("");
+  }
+
+  function piirraChips(){
+    // Чипов больше нет: собранное показывают четыре параметра под панелью.
+    piirraEhdot();
+  }
+
+  /* ---------- поиск ----------
+     Пока по массиву в этом файле. Когда у сайта появится эндпоинт, тело
+     заменится на запрос к HAE_URL — наружу функция не меняется. */
+  function etsi(){
+    var k = tila.kriteerit;
+    var hlo = henkilomaara();
+    var budj = parseInt(String(k.budjetti||"").replace(/\D/g,""), 10) || 0;
+    var yot = oita(k.saapuminen, k.lahto);
+
+    var lista = OBJEKTIT.filter(function(o){
+      if (hlo && o.vuodepaikat < hlo) return false;
+      // Бюджет гость называет как придётся — за поездку или за сутки.
+      // Считаем за поездку, если знаем число ночей, и даём 15 % запаса:
+      // отсечь по копейкам хуже, чем показать на один вариант больше.
+      if (budj && yot && o.hinta_vrk * yot > budj * 1.15) return false;
+      if (budj && !yot && o.hinta_vrk > budj * 1.15) return false;
+      return true;
+    });
+
+    // Объект без запрошенного допа не выбрасываем — допы часто докупаются.
+    // Но тот, где всё уже есть, идёт выше.
+    lista.sort(function(a,b){ return paino(b) - paino(a) || a.hinta_vrk - b.hinta_vrk; });
+    function paino(o){
+      var p = 0;
+      ["sauna","vene","palju"].forEach(function(f){
+        if (k[f] && o.varustus.indexOf(f) >= 0) p++;
+      });
+      return p;
+    }
+    tila.ehdokkaat = lista.slice(0, 5);
+    return tila.ehdokkaat;
+  }
+
+  function oita(a, b){
+    var d1 = pvm(a), d2 = pvm(b);
+    if (!d1 || !d2) return 0;
+    var n = Math.round((d2 - d1) / 86400000);
+    return n > 0 ? n : 0;
+  }
+  // Дата приходит от модели как YYYY-MM-DD. Прочее не разбираем: пусть
+  // лучше число ночей будет неизвестно, чем угадано неверно.
+  function pvm(s){
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s||"").trim());
+    return m ? new Date(+m[1], +m[2]-1, +m[3]) : null;
+  }
+
+  function summa(){
+    if (!tila.valittu) return 0;
+    var yot = oita(tila.kriteerit.saapuminen, tila.kriteerit.lahto) || 1;
+    var hlo = henkilomaara() || 1;
+    var s = tila.valittu.hinta_vrk * yot;
+    LISAT.forEach(function(l){
+      if (!tila.lisat[l.id]) return;
+      if (tila.valittu.varustus.indexOf(l.id) >= 0) return;   // уже в комплекте
+      s += l.per === "hlo" ? l.hinta * hlo : l.hinta;
+    });
+    return s;
+  }
+
+  /* ---------- карточки ---------- */
+  /* Результат поиска рисуется в ту же галерею: крупная карточка в центре,
+     соседние по краям. Отдельного экрана со списком нет. */
+  function piirraKortit(){
+    var rail = el("rail"), hero = el("hero"), uusi = el("uusiRivi");
+    if (!rail) return;
+    // Сбрасывать нечего, пока результата нет: кнопка нового поиска
+    // появляется вместе с фотографиями и уходит вместе с ними.
+    if (uusi) uusi.classList.toggle("hide", !tila.ehdokkaat.length);
+    if (!tila.ehdokkaat.length) {
+      rail.innerHTML = "";
+      if (hero) hero.classList.add("tyhja");
+      if (typeof paivitaRail === "function") paivitaRail();
+      return;
+    }
+    rail.innerHTML = tila.ehdokkaat.map(function(o){
+      var kuva = o.kuva ? '<img src="'+o.kuva+'" alt="">' : '<div class="noimg"></div>';
+      var ale  = o.ale ? '<span class="off">'+o.ale+'%</span>' : '';
+      return '<div class="item" data-pick="'+o.id+'">'+
+        kuva + ale +
+        '<span class="hinta">alk '+eurLyhyt(o.hinta_vrk)+'</span>'+
+        '<div class="shade"></div>'+
+        '<div class="cap"><i>'+o.alue+'</i><b>'+o.nimi+'</b></div>'+
+      '</div>';
+    }).join("");
+    if (hero) hero.classList.remove("tyhja");
+    rail.scrollLeft = 0;
+    // Пересчёт на следующем кадре: до него браузер ещё не разместил
+    // карточки, и центральная не определяется — все остаются притушенными.
+    requestAnimationFrame(function(){
+      if (typeof paivitaRail === "function") paivitaRail();
+    });
+  }
+
+  function suomiPvm(s){
+    var d = pvm(s); if (!d) return s || "";
+    function kk(n){ return (n<10?"0":"")+n; }
+    return kk(d.getDate())+"."+kk(d.getMonth()+1)+"."+d.getFullYear();
+  }
+
+  /* Карточку выбирают нажатием на неё же — отдельной кнопки нет.
+     Лента на время перетаскивания забирает указатель себе
+     (setPointerCapture), и click приходит НА ЛЕНТУ, а не на карточку:
+     e.target всегда сама лента, и поиск по ней ничего не находил.
+     Поэтому карточку ищем по координатам нажатия. */
+  el("rail").addEventListener("click", function(e){
+    if (window.railVeti && window.railVeti()) return;   // это было перетаскивание
+    var k = (e.target && e.target.closest) ? e.target.closest(".item") : null;
+    if (!k) {
+      var n = document.elementFromPoint(e.clientX, e.clientY);
+      k = (n && n.closest) ? n.closest(".item") : null;
+    }
+    if (!k) return;
+    var id = k.getAttribute("data-pick");
+    if (id) valitse(id);
+  });
+
+  /* Нажали фото — проваливаемся в карточку объекта, а не сразу в допы:
+     по одной фотографии в ленте не решают. */
+  function valitse(id){
+    var o = null;
+    for (var i=0;i<OBJEKTIT.length;i++) if (OBJEKTIT[i].id === id) o = OBJEKTIT[i];
+    if (!o) return;
+    tila.valittu = o;
+    // Допы, которые гость уже называл, включаем сразу — второй раз
+    // спрашивать о них незачем.
+    LISAT.forEach(function(l){ if (tila.kriteerit[l.id]) tila.lisat[l.id] = true; });
+    piirraKortti();
+    vaihe(2);
+  }
+
+  /* Карточка объекта. Цена показана дважды: прейскурантом за сутки и за
+     неделю — и счётом на названные гостем даты. Решение принимают по
+     второму числу, а не по первому. */
+  function piirraKortti(){
+    var k = el("kortti"), o = tila.valittu;
+    if (!k || !o) return;
+    var yot = oita(tila.kriteerit.saapuminen, tila.kriteerit.lahto);
+    var hlo = henkilomaara();
+
+    var kuva = o.kuva ? '<img src="'+o.kuva+'" alt="">' : '<div class="noimg"></div>';
+    var ale  = o.ale ? '<span class="off">'+o.ale+'%</span>' : '';
+
+    var spec = [o.makuuhuoneet+" "+T("k_mh"),
+                o.vuodepaikat+" "+T("k_vuodepaikkaa"),
+                o.wc+" "+T("k_wc")]
+               .map(function(s){ return '<span>'+s+'</span>'; }).join("");
+
+    var varusteet = (o.varustus || []).map(function(v){
+      return '<span>'+(T("v_"+v) || v)+'</span>';
+    }).join("");
+
+    var pvm = yot
+      ? suomiPvm(tila.kriteerit.saapuminen)+" – "+suomiPvm(tila.kriteerit.lahto)+
+        " · "+yot+" "+T("yota")+(hlo ? " · "+hlo+" "+T("hlo") : "")
+      : "";
+
+    k.innerHTML =
+      '<div class="pic">'+kuva+ale+'</div>'+
+      '<div class="body">'+
+        '<b class="nimi">'+o.nimi+'</b>'+
+        '<span class="alue">'+o.alue+'</span>'+
+        (pvm ? '<span class="pvm">'+pvm+'</span>' : '')+
+        '<div class="spec">'+spec+'</div>'+
+        (varusteet
+          ? '<span class="alue" style="margin-top:14px">'+T("sisaltyy_hintaan")+'</span>'+
+            '<div class="varusteet">'+varusteet+'</div>'
+          : '')+
+        '<div class="row">'+
+          '<span class="alue">'+eurLyhyt(o.hinta_vrk)+' '+T("p_vrk")+
+            ' · '+eurLyhyt(o.hinta_vko)+' '+T("p_vko")+'</span>'+
+          '<span class="hinta">'+
+            '<small>'+(yot ? yot+" "+T("yota")+" × "+eurLyhyt(o.hinta_vrk) : T("yhteensa"))+'</small>'+
+            '<b>'+eur(yot ? o.hinta_vrk*yot : o.hinta_vrk)+'</b>'+
+          '</span>'+
+        '</div>'+
+      '</div>';
+  }
+
+  el("takaisin").addEventListener("click", function(){ vaihe(1); });
+  el("toLisat").addEventListener("click", function(){ piirraLisat(); vaihe(3); });
+
+  /* ---------- допы ---------- */
+  /* Допов тридцать. Простынёй в один список их не читают, поэтому
+     показываем группами, как на сайте: проживание, сауна, вода,
+     рыбалка, детям, прочее. */
+  function piirraLisat(){
+    var hlo = henkilomaara() || 1;
+    var ryhmat = [];
+    LISAT.forEach(function(l){ if (ryhmat.indexOf(l.r) < 0) ryhmat.push(l.r); });
+
+    el("lisat").innerHTML = ryhmat.map(function(r){
+      var rivit = LISAT.filter(function(l){ return l.r === r; }).map(function(l){
+        var kuuluu = tila.valittu && tila.valittu.varustus.indexOf(l.id) >= 0;
+        var hinta;
+        if (kuuluu)                   hinta = T("sisaltyy");
+        else if (l.per === "paikalla")hinta = T("paikalla");
+        else if (!l.hinta)            hinta = T("veloituksetta");
+        else                          hinta = eur(l.per === "hlo" ? l.hinta * hlo : l.hinta);
+        var on = (tila.lisat[l.id] || kuuluu) ? " on" : "";
+        return '<div class="lisa">'+
+          '<div class="t"><b>'+l.nimi+'</b>'+(l.alt?'<small>'+l.alt+'</small>':'')+'</div>'+
+          '<span class="p">'+hinta+'</span>'+
+          '<div class="sw'+on+'" data-l="'+l.id+'"'+(kuuluu?' style="opacity:.4; pointer-events:none"':'')+'></div>'+
+        '</div>';
+      }).join("");
+      return '<div class="ryhma"><span class="lbl">'+T(r)+'</span>'+rivit+'</div>';
+    }).join("");
+    piirraTotal();
+  }
+
+  /* Состав группы: взрослые плюс дети. Малыши до двух лет в число мест
+     на сайте не идут, поэтому и здесь не считаются. */
+  function henkilomaara(){
+    var a = parseInt(tila.kriteerit.aikuiset, 10) || 0;
+    var l = parseInt(tila.kriteerit.lapset, 10) || 0;
+    var n = a + l;
+    if (!n) n = parseInt(tila.kriteerit.henkiloa, 10) || 0;
+    return n;
+  }
+
+  el("lisat").addEventListener("click", function(e){
+    var id = e.target.getAttribute("data-l");
+    if (!id) return;
+    tila.lisat[id] = !tila.lisat[id];
+    piirraLisat();
+  });
+
+  function piirraTotal(){
+    if (!tila.valittu) return;
+    var yot = oita(tila.kriteerit.saapuminen, tila.kriteerit.lahto) || 1;
+    var hlo = henkilomaara() || 1;
+    var rivit = '<div class="r"><b>'+tila.valittu.nimi+'</b><span>'+eur(tila.valittu.hinta_vrk*yot)+'</span></div>'+
+                '<div class="r"><b>'+yot+' yötä · '+hlo+' hlö</b><span></span></div>';
+    LISAT.forEach(function(l){
+      if (!tila.lisat[l.id]) return;
+      if (tila.valittu.varustus.indexOf(l.id) >= 0) return;
+      var h = l.per === "hlo" ? l.hinta*hlo : l.hinta;
+      rivit += '<div class="r"><b>'+l.nimi+'</b><span>'+eur(h)+'</span></div>';
+    });
+    var html = rivit + '<div class="s"><span>' + T("yhteensa") + '</span><span>'+eur(summa())+'</span></div>';
+    el("total").innerHTML = html;
+    if (el("total2")) el("total2").innerHTML = html;
+  }
+
+  el("toForm").addEventListener("click", function(){
+    if (tila.asiakas.nimi)    el("fName").value = tila.asiakas.nimi;
+    if (tila.asiakas.sahko)   el("fMail").value = tila.asiakas.sahko;
+    if (tila.asiakas.puhelin) el("fTel").value  = tila.asiakas.puhelin;
+    piirraTotal();
+    vaihe(4);
+  });
+
+  /* ---------- оплата: ЗАГЛУШКА ---------- */
+  el("pay").addEventListener("click", function(){
+    tila.asiakas.nimi    = el("fName").value.trim();
+    tila.asiakas.sahko   = el("fMail").value.trim();
+    tila.asiakas.puhelin = el("fTel").value.trim();
+    maksuun();
+  });
+
+  function maksuun(){
+    var yot = oita(tila.kriteerit.saapuminen, tila.kriteerit.lahto) || 1;
+    el("okRivi").textContent = (tila.valittu ? tila.valittu.nimi : "") + " · " +
+      suomiPvm(tila.kriteerit.saapuminen) + " – " + suomiPvm(tila.kriteerit.lahto) +
+      " · " + yot + " yötä · " + (henkilomaara()||"?") + " hlö";
+    el("okSumma").textContent = eur(summa());
+    vaihe(5);
+    // ЗАГЛУШКА: сюда встанет переход к платёжному провайдеру.
+    // window.location.href = "https://maksu.example/..." + varausId;
+  }
+
+  /* Новый поиск. Стирается всё: критерии, разговор, результат и выбранный
+     объект — экран возвращается в тот вид, с которого приложение открылось.
+     Одна и та же работа для кнопки под результатом и для кнопки на экране
+     подтверждения, поэтому она здесь одна. */
+  function uusiHaku(){
+    tila = { kriteerit:{}, historia:[], ehdokkaat:[], valittu:null, lisat:{}, asiakas:{}, vaihe:1 };
+    el("puhelu").innerHTML = "";
+    el("kysymys").innerHTML = "";
+    el("say").value = "";
+    piirraKortit();
+    piirraEhdot();
+    vaihe(1);
+    aloita();
+  }
+  el("restart").addEventListener("click", uusiHaku);
+  el("uusiHaku").addEventListener("click", uusiHaku);
+
+  /* ---------- разговор ----------
+     На провод идёт тот же диалект, что в HORECA: contents с ролями
+     user/model, голос как inlineData. Ответ воркера:
+     { kriteerit:{...}, kysymys:"...", valmis:bool, valinta:"o2", asiakas:{...} } */
+  var busy = false;
+
+  function laheta(parts, nakyva){
+    if (busy) return;
+    busy = true;
+    opastusPois();
+    if (nakyva) puhu("me", nakyva);
+    var odotus = puhu("bot", "…", true);
+    tila.historia.push({ role:"user", parts: parts });
+
+    fetch(API, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        mode:"varaus",
+        kieli: (el("kieli") ? el("kieli").value : "fi"),
+        kriteerit: tila.kriteerit,
+        vaihe: tila.vaihe,
+        ehdokkaat: tila.ehdokkaat.map(function(o){ return {id:o.id, nimi:o.nimi, hinta_vrk:o.hinta_vrk}; }),
+        contents: tila.historia.slice(-30)
+      })
+    })
+    .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+    .then(function(d){ odotus.remove(); kasittele(d); })
+    .catch(function(e){
+      odotus.remove();
+      puhu("bot", T("yhteys"));
+      el("st").textContent = String(e && e.message || e);
+    })
+    .finally(function(){ busy = false; });
+  }
+
+  function kasittele(d){
+    d = d || {};
+    // Гость сказал «начнём заново» — всё стирается тем же путём, что и
+    // по кнопке. Отдельной ветки у голоса нет.
+    if (d.nollaa) { uusiHaku(); return; }
+    // Критерии только дописываются: агент не должен терять сказанное раньше.
+    if (d.kriteerit) Object.keys(d.kriteerit).forEach(function(k){
+      var v = d.kriteerit[k];
+      if (v !== "" && v !== null && v !== undefined) tila.kriteerit[k] = v;
+    });
+    if (d.asiakas) Object.keys(d.asiakas).forEach(function(k){
+      if (d.asiakas[k]) tila.asiakas[k] = d.asiakas[k];
+    });
+    piirraChips();
+
+    // Разобранное показывают четыре параметра под панелью — второй раз
+    // в ленте оно не нужно.
+
+    var sana = d.kysymys || d.viesti || "";
+    if (sana) {
+      puhu("bot", sana);
+      tila.historia.push({ role:"model", parts:[{text:sana}] });
+    }
+    if (d.valinta) { valitse(d.valinta); return; }
+    // Четыре параметра закрыты — ищем и показываем результат тут же,
+    // на первом экране. Отдельного экрана со списком нет. Поиск идёт
+    // заново на КАЖДОМ следующем ответе: гость меняет условия голосом,
+    // и выдача обновляется сама, без кнопок.
+    if (d.valmis || !kysyttava()) {
+      etsi();
+      piirraKortit();
+      // Смотрел карточку, а назвал другие условия — возвращаем к выдаче,
+      // иначе новый результат остался бы за спиной. С брони не уводим.
+      if (tila.vaihe === 2) vaihe(1);
+      // Подсказка живёт там же, где всё управление: под микрофоном.
+      el("st").textContent = T("vihje_muuta");
+    }
+  }
+
+  function aloita(){
+    // Начинаем тем же, чем начинается форма на сайте: один короткий
+    // вопрос, на который можно ответить одним словом. Простыня «расскажите
+    // какой домик вы хотите» не даёт человеку что ответить.
+    puhu("bot", "Milloin tulisitte? Esim. 27.12.–2.1.");
+
+  }
+
+  function sendText(){
+    var t = el("say").value.trim();
+    if (!t) return;
+    el("say").value = "";
+    laheta([{text:t}], t);
+  }
+  el("send").addEventListener("click", sendText);
+  el("say").addEventListener("keydown", function(e){
+    // Enter отправляет, Shift+Enter делает перенос строки.
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText(); }
+  });
+
+  /* ---------- голос ----------
+     Перенесено из демо HORECA вместе с обходами: старый Safari не
+     возвращает промис из decodeAudioData, а формат, который он не
+     декодирует, модель всё равно читает. Ни то ни другое не должно
+     стоить записи. */
+  var rec=null, chunks=[], stream=null, t0=0, ticker=null;
+
+  /* Удержание, а не нажатие: держишь — говоришь, отпустил — ушло.
+     Не надо помнить, что кнопку жмут второй раз. contextmenu гасим:
+     на телефоне долгое нажатие иначе открывает меню. */
+  (function(){
+    var mic = el("mic");
+    mic.addEventListener("pointerdown", function(e){
+      if (busy) return;
+      e.preventDefault();
+      startRec();
+    });
+    function lopeta(){ if (rec && rec.state === "recording") stopRec(); }
+    document.addEventListener("pointerup", lopeta);
+    document.addEventListener("pointercancel", lopeta);
+    mic.addEventListener("contextmenu", function(e){ e.preventDefault(); });
+  })();
+
+  /* Разрешение на микрофон браузер спрашивает на КАЖДЫЙ getUserMedia,
+     а страница, открытая с диска, не запоминает его между вызовами.
+     Поэтому поток берём один раз и держим: гость отвечает на четыре
+     вопроса, а не тыкает «разрешить» четыре раза. */
+  function anna(){
+    var elossa = stream && stream.getTracks().some(function(t){ return t.readyState === "live"; });
+    if (elossa) return Promise.resolve(stream);
+    return navigator.mediaDevices.getUserMedia({audio:true}).then(function(s){
+      stream = s;
+      return s;
+    });
+  }
+
+  function startRec(){
+    if (!navigator.mediaDevices || !window.MediaRecorder){
+      el("st").textContent = T("s_ei_tue");
+      return;
+    }
+    anna().then(function(s){
+      chunks = [];
+      rec = new MediaRecorder(s);
+      rec.ondataavailable = function(e){ if (e.data.size) chunks.push(e.data); };
+      rec.onstop = finishRec;
+      rec.start(); t0 = Date.now();
+      el("mic").classList.add("rec");
+      ticker = setInterval(function(){
+        var s2 = Math.floor((Date.now()-t0)/1000);
+        el("st").textContent = T("s_kuuntelen")+" · "+s2+" s · "+T("s_valmis");
+        if (s2 >= 40) stopRec();
+      }, 250);
+    }).catch(function(){ el("st").textContent = T("s_salli"); });
+  }
+
+  function stopRec(){
+    if (rec && rec.state === "recording") rec.stop();
+    // Дорожки НЕ глушим: закрытый поток означает новый запрос разрешения
+    // на следующем вопросе.
+    clearInterval(ticker);
+    el("mic").classList.remove("rec");
+  }
+
+  function finishRec(){
+    if (!chunks.length || (Date.now()-t0) < 800){
+      el("st").textContent = T("s_lyhyt");
+      return;
+    }
+    el("st").textContent = T("s_kasittelen");
+    var type = (rec && rec.mimeType) ? rec.mimeType.split(";")[0] : "audio/webm";
+    new Blob(chunks, {type:type}).arrayBuffer().then(function(b){
+      return new Promise(function(resolve, reject){
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) { reject(0); return; }
+        var ctx = new AC();
+        if (ctx.state === "suspended" && ctx.resume) { try { ctx.resume(); } catch(e){} }
+        var p;
+        try { p = ctx.decodeAudioData(b, resolve, reject); } catch(e) { reject(e); return; }
+        if (p && typeof p.then === "function") p.then(resolve, reject);
+      }).then(function(a){
+        return { mimeType:"audio/wav", data:b64(wav(a,16000)) };
+      }, function(){
+        return { mimeType:type, data:b64(b) };
+      });
+    }).then(function(part){
+      el("st").textContent = "";
+      // Текст распознанного придёт от воркера в ответе; пока показываем,
+      // что запись ушла — иначе человеку кажется, что ничего не случилось.
+      laheta([{inlineData:part}], "\u2026");
+    }).catch(function(){
+      el("st").textContent = T("s_virhe");
+    });
+  }
+
+  function b64(ab){
+    var b = new Uint8Array(ab), s = "", st = 0x8000;
+    for (var i=0;i<b.length;i+=st) s += String.fromCharCode.apply(null, b.subarray(i, i+st));
+    return btoa(s);
+  }
+  function wav(buf, rate){
+    var src = buf.getChannelData(0), ratio = buf.sampleRate/rate;
+    var n = Math.floor(src.length/ratio), pcm = new Int16Array(n);
+    for (var i=0;i<n;i++){ var v = src[Math.floor(i*ratio)]; v = v<-1?-1:v>1?1:v; pcm[i] = v<0 ? v*0x8000 : v*0x7FFF; }
+    var out = new ArrayBuffer(44+pcm.length*2), dv = new DataView(out);
+    function str(o,s){ for (var j=0;j<s.length;j++) dv.setUint8(o+j, s.charCodeAt(j)); }
+    str(0,"RIFF"); dv.setUint32(4, 36+pcm.length*2, true); str(8,"WAVEfmt ");
+    dv.setUint32(16,16,true); dv.setUint16(20,1,true); dv.setUint16(22,1,true);
+    dv.setUint32(24,rate,true); dv.setUint32(28,rate*2,true);
+    dv.setUint16(32,2,true); dv.setUint16(34,16,true);
+    str(36,"data"); dv.setUint32(40, pcm.length*2, true);
+    for (var m=0;m<pcm.length;m++) dv.setInt16(44+m*2, pcm[m], true);
+    return out;
+  }
+
+  /* ---------- галерея ----------
+     Перенесено с visuals.ai-craft-studio.com без изменений в логике.
+     Что здесь важно и чего я сам не сделал бы:
+       setActive  — центральная карточка получает класс active: размер,
+                    яркость и подпись. Соседние притушены.
+       стрелки    — направление как у них: левая листает ВПЕРЁД.
+       колесо     — замок на 420 мс, иначе одно движение пролистывает всё.
+       перетаскивание — только мышью. У касания e.pointerType === "touch"
+                    и мы не вмешиваемся: там работает родная прокрутка. */
+  (function(){
+    var rail = el("rail");
+    if (!rail) return;
+    var prev = el("prev"), next = el("next"), laskuri = el("laskuri");
+    // Карточки появляются после поиска, поэтому список берём заново
+    // при каждом обращении, а не один раз при загрузке.
+    var items = [], total = 0;
+    function lue(){
+      items = rail.querySelectorAll(".item");
+      total = items.length;
+    }
+    lue();
+
+    function current(){
+      var mid = rail.scrollLeft + rail.clientWidth / 2;
+      var best = 0, bestD = Infinity;
+      for (var i = 0; i < total; i++){
+        var c = items[i].offsetLeft + items[i].offsetWidth / 2;
+        var d = Math.abs(c - mid);
+        if (d < bestD){ bestD = d; best = i; }
+      }
+      return best;
+    }
+
+    function goTo(i){
+      if (i < 0) i = 0;
+      if (i > total - 1) i = total - 1;
+      var it = items[i];
+      rail.scrollTo({ left: it.offsetLeft - (rail.clientWidth - it.offsetWidth) / 2,
+                      behavior: "smooth" });
+    }
+
+    var activeIdx = -1;
+    function setActive(i){
+      if (i === activeIdx) return;
+      activeIdx = i;
+      for (var k = 0; k < total; k++){
+        if (k === i) items[k].classList.add("active");
+        else         items[k].classList.remove("active");
+      }
+    }
+
+    function refresh(){
+      if (!total) {
+        // Результата ещё нет — подпись остаётся, цифр в ней нет.
+        if (laskuri) laskuri.innerHTML = '<span class="merkki">' + T("hakutulos") + '</span>';
+        return;
+      }
+      var i = current();
+      setActive(i);
+      // Подпись говорит, что это результат поиска, а не картинки
+      // для красоты. Пока объекты заглушечные, слово то же.
+      if (laskuri) laskuri.innerHTML = '<span class="merkki">' + T("hakutulos") + '<b>' +
+        (i + 1) + "/" + total + "</b></span>";
+      if (prev) prev.disabled = rail.scrollLeft > rail.scrollWidth - rail.clientWidth - 4;
+      if (next) next.disabled = rail.scrollLeft < 4;
+    }
+
+    rail.addEventListener("scroll", refresh, {passive:true});
+    window.addEventListener("resize", refresh);
+    refresh();
+
+    // Вызывается после отрисовки результата поиска.
+    window.paivitaRail = function(){ lue(); activeIdx = -1; refresh(); };
+
+    /* стрелка = направление движения ленты */
+    if (prev) prev.addEventListener("click", function(){ goTo(current() + 1); });
+    if (next) next.addEventListener("click", function(){ goTo(current() - 1); });
+
+    var wheelLock = false;
+    rail.addEventListener("wheel", function(e){
+      var dy = Math.abs(e.deltaY), dx = Math.abs(e.deltaX);
+      if (dx > dy) return;
+      if (dy < 2) return;
+      e.preventDefault();
+      if (wheelLock) return;
+      wheelLock = true;
+      goTo(current() + (e.deltaY > 0 ? 1 : -1));
+      setTimeout(function(){ wheelLock = false; }, 420);
+    }, {passive:false});
+
+    var down = false, startX = 0, startLeft = 0, moved = 0;
+    // Перетащили — значит листали, а не выбирали. Выбор об этом спрашивает.
+    window.railVeti = function(){ return moved > 8; };
+    rail.addEventListener("pointerdown", function(e){
+      if (e.pointerType === "touch") { moved = 0; return; }
+      down = true; moved = 0;
+      startX = e.clientX;
+      startLeft = rail.scrollLeft;
+      rail.classList.add("dragging");
+      rail.setPointerCapture(e.pointerId);
+    });
+    rail.addEventListener("pointermove", function(e){
+      if (!down) return;
+      var d = e.clientX - startX;
+      moved = Math.abs(d);
+      rail.scrollLeft = startLeft - d;
+    });
+    function endDrag(e){
+      if (!down) return;
+      down = false;
+      rail.classList.remove("dragging");
+      if (e && e.pointerId != null && rail.hasPointerCapture && rail.hasPointerCapture(e.pointerId)) {
+        rail.releasePointerCapture(e.pointerId);
+      }
+      if (moved > 8) goTo(current());
+    }
+    rail.addEventListener("pointerup", endDrag);
+    rail.addEventListener("pointercancel", endDrag);
+
+    rail.setAttribute("tabindex", "0");
+    rail.addEventListener("keydown", function(e){
+      if (e.key === "ArrowLeft"){  e.preventDefault(); goTo(current() + 1); }
+      if (e.key === "ArrowRight"){ e.preventDefault(); goTo(current() - 1); }
+    });
+  })();
+
+  if (el("kieli")) el("kieli").addEventListener("change", function(){
+    kieli = this.value;
+    document.documentElement.setAttribute("lang", kieli);
+    kaanna();
+  });
+
+  /* Карта встаёт посередине между подписью и вопросом — зазоры сверху
+     и снизу одинаковые на любом экране. */
+  function asetaKartta(){
+    var k = document.querySelector(".kartta");
+    var yla = el("laskuri");
+    var ala = el("kysymys");
+    if (!k || !yla || !ala) return;
+    var a = yla.getBoundingClientRect().bottom;
+    var b = ala.getBoundingClientRect().top;
+    var h = k.getBoundingClientRect().height;
+    var tila_ = b - a;
+    k.style.top = Math.round(a + (tila_ - h) / 2) + "px";
+  }
+  window.addEventListener("resize", asetaKartta);
+  var _vanhaVaihe = vaihe;
+  vaihe = function(n){ _vanhaVaihe(n); requestAnimationFrame(asetaKartta); };
+
+  kaanna();
+  piirraChips(); vaihe(1); aloita();
+  requestAnimationFrame(asetaKartta);
+})();
+</script>
+</body>
+</html>
