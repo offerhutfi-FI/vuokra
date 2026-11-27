@@ -422,6 +422,18 @@ body.puhutaan .loki .q,body.puhutaan .loki .a{font-size:18px;line-height:1.45;ma
 #st[data-state=listening],#st[data-state=speaking]{background:#e2f5e9;color:#125b30}#st[data-state=listening]::before,#st[data-state=speaking]::before{background:#16834b;content:'●'}
 #st[data-state=permission],#st[data-state=loading],#st[data-state=waiting]{background:#fff0d6;color:#754700}#st[data-state=permission]::before,#st[data-state=loading]::before,#st[data-state=waiting]::before{background:#a66a13;content:'…'}
 #st[data-state=searching]::before,#st[data-state=results]::before{background:#2563eb;content:'✓'}#st[data-state=error]::before{background:#b52c35;content:'!'}
+
+/* Conversation viewport: only the history scrolls; controls stay visible. */
+body.puhutaan .app{height:100vh;height:100dvh;min-height:0;padding-bottom:0;display:flex;flex-direction:column}
+body.puhutaan .bar{flex:0 0 auto;position:relative}
+body.puhutaan #vaihe1{flex:1 1 0;min-height:0;display:flex;flex-direction:column;overflow-y:auto}
+body.puhutaan .dock{flex:1 1 0;min-height:260px;display:flex;flex-direction:column;margin:8px 10px;padding-bottom:max(10px,env(safe-area-inset-bottom))}
+body.puhutaan .mrow{flex:1 1 0;min-height:0}
+body.puhutaan .inp{height:auto;flex:1 1 0;min-height:100px}
+body.puhutaan .loki{flex:1 1 0;min-height:0;overflow-y:auto;touch-action:pan-y;-webkit-overflow-scrolling:touch;overflow-wrap:anywhere}
+body.puhutaan #st,body.puhutaan #stopVoice{flex-shrink:0}
+body.puhutaan #ehdot,body.puhutaan #uusiRivi{display:none!important}
+@media(max-height:500px){body.puhutaan .dock #st{min-height:48px;padding:6px;font-size:16px}body.puhutaan #st::before{height:36px;flex-basis:36px}body.puhutaan .bar{padding:6px 12px}}
 </style>
 </head>
 <body class="foto">
