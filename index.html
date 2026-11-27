@@ -1247,34 +1247,54 @@
      { kriteerit:{...}, kysymys:"...", valmis:bool, valinta:"o2", asiakas:{...} } */
   var busy = false;
 
-  /* У каждого запроса свой срок. Без него молчащий ответ держит флаг
-     занятости навсегда, и после первой реплики интерфейс перестаёт
-     отвечать — замечено на Android 27.11.2026. */
-  var ODOTUS_MS = 60000;
+  /* НИ ОДНО ОЖИДАНИЕ НЕ БЕСКОНЕЧНО.
 
-  function fetchAikarajalla(osoite, asetukset, ms){
-    var ohjain = window.AbortController ? new AbortController() : null;
-    var kello = setTimeout(function(){
-      if (ohjain) ohjain.abort();
-    }, ms || ODOTUS_MS);
-    var mukana = Object.assign({}, asetukset);
-    if (ohjain) mukana.signal = ohjain.signal;
-    return fetch(osoite, mukana).then(function(r){
-      clearTimeout(kello);
-      return r;
-    }, function(e){
-      clearTimeout(kello);
-      // прерванный по сроку запрос должен выглядеть понятно
-      if (e && (e.name === "AbortError")) throw new Error("aikakatkaisu");
-      throw e;
-    });
+     Срок нужен не только соединению. Сервер может прислать заголовки
+     и замолчать на теле — тогда вечно ждёт разбор ответа. Может не
+     вернуться чтение файла, пересчёт звука или сам микрофон. Любое
+     такое ожидание держит флаг занятости, и интерфейс мертвеет —
+     ровно это и видели на Android 27.11.2026. */
+  var ODOTUS_MS = 60000;    // ответ воркера
+  var MIKKI_MS  = 30000;    // разрешение на микрофон
+  var MUUNNOS_MS = 5000;    // пересчёт звука и чтение файла
+
+  function odotuksella(lupaus, ms, vaihe){
+    var kello;
+    return Promise.race([
+      lupaus,
+      new Promise(function(_, hylkaa){
+        kello = setTimeout(function(){
+          hylkaa(new Error(vaihe + ": aikakatkaisu"));
+        }, ms);
+      })
+    ]).then(function(a){ clearTimeout(kello); return a; },
+            function(e){ clearTimeout(kello); throw e; });
   }
 
   async function apiCall(body){
-    const r = await fetchAikarajalla(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    const d = await r.json();
-    if (!r.ok || d.error) throw new Error([d.error,d.vaihe,d.status,d.syy].filter(Boolean).join(" ") || "HTTP "+r.status);
-    return d;
+    var ohjain = window.AbortController ? new AbortController() : null;
+    var kello = setTimeout(function(){ if (ohjain) ohjain.abort(); }, ODOTUS_MS);
+    try {
+      var asetukset = {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      };
+      if (ohjain) asetukset.signal = ohjain.signal;
+      const r = await fetch(API, asetukset);
+      // разбор тела ВНУТРИ срока: иначе молчание на теле вешает всё
+      const d = await r.json();
+      if (!r.ok || d.error) {
+        throw new Error([d.error,d.vaihe,d.status,d.syy].filter(Boolean).join(" ")
+                        || "HTTP " + r.status);
+      }
+      return d;
+    } catch(e) {
+      if (e && e.name === "AbortError") throw new Error("aikakatkaisu: " + body.mode);
+      throw e;
+    } finally {
+      clearTimeout(kello);
+    }
   }
   async function laheta(parts, nakyva){
     if (busy) return;
@@ -1481,7 +1501,12 @@
       }
     }
     if (yhteinenCtx.state === "suspended" && yhteinenCtx.resume){
-      try { yhteinenCtx.resume(); } catch(e){}
+      // отказ пробуждения глушим: иначе он всплывает как
+      // необработанный и попадает в диагностику чужой ошибкой
+      try {
+        var p = yhteinenCtx.resume();
+        if (p && typeof p.catch === "function") p.catch(function(){});
+      } catch(e){}
     }
     return yhteinenCtx;
   }
@@ -1602,12 +1627,20 @@
     });
   }
 
+  /* У чтения файла были только успешные исходы: ни onerror, ни
+     onabort. Упало чтение — обещание не разрешалось никогда. */
   function toBase64(blob){
-    return new Promise(function(valmis){
+    return odotuksella(new Promise(function(valmis, hylkaa){
       var r = new FileReader();
-      r.onloadend = function(){ valmis(String(r.result).split(",")[1]); };
+      r.onload = function(){
+        var data = String(r.result || "").split(",")[1];
+        if (!data) { hylkaa(new Error("tyhja aani")); return; }
+        valmis(data);
+      };
+      r.onerror = function(){ hylkaa(new Error("FileReader")); };
+      r.onabort = function(){ hylkaa(new Error("FileReader keskeytyi")); };
       r.readAsDataURL(blob);
-    });
+    }), MUUNNOS_MS, "base64");
   }
 
   function stopStream(){
@@ -1627,6 +1660,27 @@
     el("mic").classList.remove("rec");
   }
 
+  /* Микрофон тоже может не ответить: запрос разрешения иногда не
+     показывается вовсе. Ждём ограниченно, а если разрешение придёт
+     после срока — поток закрываем, иначе микрофон останется
+     включённым и человек об этом не узнает. */
+  function hankiMikrofoni(){
+    var myohassa = false;
+    var pyynto = navigator.mediaDevices.getUserMedia({
+      audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }
+    }).then(function(s){
+      if (myohassa){
+        try { s.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
+        throw new Error("mikrofoni myohassa");
+      }
+      return s;
+    });
+    return odotuksella(pyynto, MIKKI_MS, "mikrofoni").catch(function(e){
+      myohassa = true;
+      throw e;
+    });
+  }
+
   var starting = false, processing = false;
   function startRecording(){
     if(starting || processing || busy) return;
@@ -1635,9 +1689,7 @@
     // Три обработки включаем явно: без них в комнате с эхом запись
     // разбирается заметно хуже.
     diag.vaihe = "mikrofoni"; diag.virhe = "";
-    navigator.mediaDevices.getUserMedia({
-      audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }
-    }).then(function(s){
+    hankiMikrofoni().then(function(s){
       starting=false; stream = s;
       // сколько браузер думал над разрешением — это и есть та задержка
       diag.lupaMs = (((Date.now() - pyyntoAlkoi) / 1000) || 0).toFixed(1) + "s";
@@ -1672,26 +1724,47 @@
           starting = false; processing = false;   // не оставляем занятым
           return;
         }
-        processing=true;
-        var wavAlkoi = Date.now();
-        toWav16k(raw).then(function(wav){
-          diag.wav = ((Date.now() - wavAlkoi) / 1000).toFixed(1) + "s";
-          return toBase64(wav);
-        }).then(function(b64){
-          el("st").textContent = "";
-          processing=false; laheta([{ inlineData:{ mimeType:"audio/wav", data:b64 } }], "\u2026");
-        }).catch(function(){
-          // Формат, который браузер не декодирует, модель всё равно
-          // читает: шлём запись как есть, а не теряем сказанное.
-          toBase64(raw).then(function(b64){
+        processing = true;
+        /* ОДИН ПУТЬ НА ВСЕ ИСХОДЫ, и флаги снимаются в конце при любом
+           из них. Раньше ветки расходились — удачный пересчёт,
+           неудачный, отказ чтения — и в каждой флаг снимался
+           по-своему, а кое-где не снимался вовсе: тогда кнопка
+           оставалась мёртвой.
+
+           Пересчёт звука тоже со сроком: не вышел — отправляем запись
+           как есть. Формат, который браузер не декодирует, модель всё
+           равно читает, а сказанное терять нельзя. */
+        (function(){
+          var alkoi = Date.now();
+          var state = tila;
+          var aani = raw;
+
+          diag.vaihe = "muunnos";
+          odotuksella(toWav16k(raw), MUUNNOS_MS, "wav").then(function(wav){
+            aani = wav;
+          }, function(){
+            aani = raw;          // не вышло — шлём исходную запись
+          }).then(function(){
+            diag.wav = ((Date.now() - alkoi) / 1000).toFixed(1) + "s";
+            diag.vaihe = "base64";
+            return toBase64(aani);
+          }).then(function(b64){
+            if (state !== tila) return;    // разговор успели начать заново
+            diag.vaihe = "lahetys";
             el("st").textContent = "";
-            processing=false; laheta([{ inlineData:{ mimeType:raw.type || "audio/webm",
-                                   data:b64 } }], "\u2026");
+            return laheta([{ inlineData:{ mimeType: aani.type || "audio/webm",
+                                          data: b64 } }], "\u2026");
+          }).then(function(){
+            if (diag.vaihe !== "virhe") diag.vaihe = "valmis";
           }).catch(function(e){
-            processing=false; diag.virhe = String((e && (e.name || e.message)) || e).slice(0, 40);
+            diag.virhe = String((e && (e.message || e.name)) || e).slice(0, 60);
+            diag.vaihe = "virhe";
             diagNayta();
+          }).then(function(){
+            starting = false;
+            processing = false;
           });
-        });
+        })();
       };
 
       /* Слушаем громкость и останавливаемся сами, когда человек
@@ -1816,8 +1889,9 @@
       // успевали отработать создание звукового контекста и отмена
       // синтеза речи. Браузер всё это время молчал.
       startRecording();
-      // звук будим следом — жест ещё считается нашим
-      setTimeout(aaniCtx, 0);
+      // Звук будим сразу следом, без таймера: запрос микрофона уже
+      // ушёл синхронно, задерживать нечего, а в таймере жест теряется.
+      if (!KASIN) aaniCtx();
     });
     mic.addEventListener("contextmenu", function(e){
       // долгое нажатие на телефоне и правый щелчок на ПК
