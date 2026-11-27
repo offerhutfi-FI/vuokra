@@ -406,7 +406,7 @@
   function kysyttava(){return SearchController.missing(tila.kriteerit);}
 
 /* Карта уходит на время разговора и возвращается с результатом. */
-function tyopoyta(puhutaan){document.body.classList.toggle('puhutaan',!!puhutaan);}
+function tyopoyta(puhutaan){document.body.classList.toggle('puhutaan',!!puhutaan);if(!puhutaan)requestAnimationFrame(asetaKartta);}
 
   function piirraEhdot(){
     var e = el("ehdot");
@@ -718,33 +718,30 @@ function tyopoyta(puhutaan){document.body.classList.toggle('puhutaan',!!puhutaan
   el("restart").addEventListener("click", uusiHaku);
   el("uusiHaku").addEventListener("click", uusiHaku);
 
-  const messages={"fi": {"idle": "Paina kerran aloittaaksesi. Älä pidä painettuna.", "listening": "Kuuntelen. Puhu tai kirjoita.", "speaking": "Kuulen sinut…", "waiting": "Odota. Kirjoitan vastausta…", "searching": "Etsin mökkejä…", "results": "Hakutulokset. Voit muuttaa hakua puhumalla.", "aika": "Milloin tulisitte ja lähtisitte?", "alue": "Miltä alueelta?", "hinta": "Mikä on enimmäishinta yöltä?", "vieraat": "Montako aikuista ja alle 12-vuotiasta lasta?", "permission": "Mikrofonin lupa…", "loading": "Lataan puheentunnistusta…", "error": "Virhe. Yritä uudelleen."}, "en": {"idle": "Tap once to start. Do not hold.", "listening": "Listening. Speak or type.", "speaking": "I hear you…", "waiting": "Please wait. Writing a reply…", "searching": "Searching cottages…", "results": "Search results. You can change your search by speaking.", "aika": "What are your arrival and departure dates?", "alue": "Which area?", "hinta": "Maximum budget per night?", "vieraat": "How many adults and children under 12?", "permission": "Requesting microphone…", "loading": "Loading speech detection…", "error": "Error. Try again."}, "ru": {"idle": "Нажмите один раз. Не удерживайте.", "listening": "Слушаю. Говорите или пишите.", "speaking": "Слышу вас…", "waiting": "Подождите. Печатаю ответ…", "searching": "Ищу коттеджи…", "results": "Результаты поиска. Можно изменить параметры голосом.", "aika": "На какие даты планируете поездку?", "alue": "В каком районе?", "hinta": "Максимальный бюджет за ночь?", "vieraat": "Сколько взрослых и детей до 12 лет?", "permission": "Запрашиваю микрофон…", "loading": "Загружаю распознавание речи…", "error": "Ошибка. Попробуйте снова."}, "sv": {"idle": "Tryck en gång. Håll inte inne.", "listening": "Lyssnar. Tala eller skriv.", "speaking": "Jag hör dig…", "waiting": "Vänta. Skriver svar…", "searching": "Söker stugor…", "results": "Sökresultat. Ändra sökningen med rösten.", "aika": "Vilka datum?", "alue": "Vilket område?", "hinta": "Maxbudget per natt?", "vieraat": "Hur många vuxna och barn under 12?", "permission": "Begär mikrofon…", "loading": "Laddar taldetektering…", "error": "Fel. Försök igen."}, "de": {"idle": "Einmal tippen. Nicht gedrückt halten.", "listening": "Ich höre zu. Sprechen oder schreiben.", "speaking": "Ich höre Sie…", "waiting": "Bitte warten. Schreibe Antwort…", "searching": "Suche Ferienhäuser…", "results": "Suchergebnisse. Suche per Sprache ändern.", "aika": "Anreise und Abreise?", "alue": "Welche Region?", "hinta": "Maximalbudget pro Nacht?", "vieraat": "Wie viele Erwachsene und Kinder unter 12?", "permission": "Mikrofonzugriff…", "loading": "Lade Spracherkennung…", "error": "Fehler. Erneut versuchen."}, "fr": {"idle": "Appuyez une fois, sans maintenir.", "listening": "Je vous écoute. Parlez ou écrivez.", "speaking": "Je vous entends…", "waiting": "Patientez. Je rédige la réponse…", "searching": "Recherche de chalets…", "results": "Résultats. Modifiez la recherche à la voix.", "aika": "Quelles dates d’arrivée et de départ ?", "alue": "Quelle région ?", "hinta": "Budget maximum par nuit ?", "vieraat": "Combien d’adultes et d’enfants de moins de 12 ans ?", "permission": "Accès au microphone…", "loading": "Chargement de la détection vocale…", "error": "Erreur. Réessayez."}};
+  const messages={"fi": {"idle": "Paina kerran aloittaaksesi. Älä pidä painettuna.", "listening": "Kuuntelen. Puhu tai kirjoita.", "speaking": "Kuulen sinut…", "waiting": "Odota. Kirjoitan vastausta…", "searching": "Etsin mökkejä…", "results": "Hakutulokset. Aloita uusi keskustelu tai kirjoita muuttaaksesi hakua.", "aika": "Milloin tulisitte ja lähtisitte?", "alue": "Miltä alueelta?", "hinta": "Mikä on enimmäishinta yöltä?", "vieraat": "Montako aikuista ja alle 12-vuotiasta lasta?", "permission": "Mikrofonin lupa…", "loading": "Lataan puheentunnistusta…", "error": "Virhe. Yritä uudelleen."}, "en": {"idle": "Tap once to start. Do not hold.", "listening": "Listening. Speak or type.", "speaking": "I hear you…", "waiting": "Please wait. Writing a reply…", "searching": "Searching cottages…", "results": "Search results. Start a new conversation or type to change your search.", "aika": "What are your arrival and departure dates?", "alue": "Which area?", "hinta": "Maximum budget per night?", "vieraat": "How many adults and children under 12?", "permission": "Requesting microphone…", "loading": "Loading speech detection…", "error": "Error. Try again."}, "ru": {"idle": "Нажмите один раз. Не удерживайте.", "listening": "Слушаю. Говорите или пишите.", "speaking": "Слышу вас…", "waiting": "Подождите. Печатаю ответ…", "searching": "Ищу коттеджи…", "results": "Результаты поиска. Можно изменить параметры голосом.", "aika": "На какие даты планируете поездку?", "alue": "В каком районе?", "hinta": "Максимальный бюджет за ночь?", "vieraat": "Сколько взрослых и детей до 12 лет?", "permission": "Запрашиваю микрофон…", "loading": "Загружаю распознавание речи…", "error": "Ошибка. Попробуйте снова."}, "sv": {"idle": "Tryck en gång. Håll inte inne.", "listening": "Lyssnar. Tala eller skriv.", "speaking": "Jag hör dig…", "waiting": "Vänta. Skriver svar…", "searching": "Söker stugor…", "results": "Sökresultat. Starta ett nytt samtal eller skriv.", "aika": "Vilka datum?", "alue": "Vilket område?", "hinta": "Maxbudget per natt?", "vieraat": "Hur många vuxna och barn under 12?", "permission": "Begär mikrofon…", "loading": "Laddar taldetektering…", "error": "Fel. Försök igen."}, "de": {"idle": "Einmal tippen. Nicht gedrückt halten.", "listening": "Ich höre zu. Sprechen oder schreiben.", "speaking": "Ich höre Sie…", "waiting": "Bitte warten. Schreibe Antwort…", "searching": "Suche Ferienhäuser…", "results": "Suchergebnisse. Starten Sie ein Gespräch oder schreiben Sie.", "aika": "Anreise und Abreise?", "alue": "Welche Region?", "hinta": "Maximalbudget pro Nacht?", "vieraat": "Wie viele Erwachsene und Kinder unter 12?", "permission": "Mikrofonzugriff…", "loading": "Lade Spracherkennung…", "error": "Fehler. Erneut versuchen."}, "fr": {"idle": "Appuyez une fois, sans maintenir.", "listening": "Je vous écoute. Parlez ou écrivez.", "speaking": "Je vous entends…", "waiting": "Patientez. Je rédige la réponse…", "searching": "Recherche de chalets…", "results": "Résultats. Démarrez une conversation ou écrivez.", "aika": "Quelles dates d’arrivée et de départ ?", "alue": "Quelle région ?", "hinta": "Budget maximum par nuit ?", "vieraat": "Combien d’adultes et d’enfants de moins de 12 ans ?", "permission": "Accès au microphone…", "loading": "Chargement de la détection vocale…", "error": "Erreur. Réessayez."}};
+  const startLabels={"fi": ["Aloita keskustelu", "Lopeta keskustelu"], "sv": ["Starta samtal", "Avsluta samtal"], "en": ["Start conversation", "End conversation"], "de": ["Gespräch starten", "Gespräch beenden"], "fr": ["Démarrer la conversation", "Terminer la conversation"], "ru": ["Начать разговор", "Завершить разговор"]};
   function labels(){return messages[el('kieli').value]||messages.fi;}
   const dialogue=new DialogueEngine(); let busy=false, currentStatus='idle';
   const voiceLog=document.createElement('pre');voiceLog.hidden=!location.search.includes('diag=1');el('st').after(voiceLog);
   function log(t){voiceLog.textContent=(new Date().toLocaleTimeString()+' '+t+'\n'+voiceLog.textContent).slice(0,12000);}
-  function showStatus(state){currentStatus=state;const st=el('st');st.dataset.state=state;st.textContent=labels()[state]||labels().waiting;el('mic').classList.toggle('rec',!!voice.session);el('mic').setAttribute('aria-pressed',String(!!voice.session));el('send').disabled=busy||['permission','loading','speaking','transcribing'].includes(state);}
-  const voice=new VoiceEngine({onState:s=>showStatus(s==='transcribing'?'waiting':s),onText:submit,onLog:log,canListen:()=>!busy});
-  function stopVoice(){dialogue.cancel();voice.stop();}
-  async function submit(text,signal){if(busy)return;busy=true;const state=tila;opastusPois();showStatus('waiting');puhu('me',text);const t=performance.now();let failed=false;try{const d=await dialogue.turn(state,text,el('kieli').value,signal);if(d&&state===tila){log('LLM '+((performance.now()-t)/1000).toFixed(2)+'s');kasittele(d);}}catch(e){if(state===tila&&!signal?.aborted){failed=true;log(String(e));puhu('bot',T('yhteys'));}}finally{busy=false;showStatus(failed?'error':voice.session?'listening':'idle');}}
-  function aloita(){puhu('bot',labels().aika);showStatus('idle');}
+  let generation=0;
+  function showStatus(state){currentStatus=state;const st=el('st');st.dataset.state=state;st.textContent=labels()[state]||labels().waiting;const names=startLabels[el('kieli').value]||startLabels.fi;el('startLabel').textContent=names[0];el('mic').setAttribute('aria-label',names[0]);el('stopVoice').textContent=names[1];el('mic').hidden=!!voice.session;el('stopVoice').hidden=!voice.session;el('mic').disabled=busy;el('send').disabled=busy||['permission','loading','speaking','waiting','searching'].includes(state);}
+  const voice=new VoiceEngine({onState:showStatus,onText:submit,onLog:log,canListen:()=>!busy});
+  function stopVoice(){generation++;dialogue.cancel();busy=false;void voice.stop();showStatus('idle');}
+  async function submit(text){if(busy)return;busy=true;const g=generation,state=tila;tyopoyta(true);opastusPois();showStatus('waiting');puhu('me',text);let finalState;try{const d=await dialogue.turn(state,text,el('kieli').value);if(d&&state===tila&&g===generation)finalState=await kasittele(d);}catch(e){if(g===generation){log(String(e));puhu('bot',T('yhteys'));finalState='error';}}finally{if(g===generation){busy=false;showStatus(finalState||(voice.session?'listening':'idle'));}}}
+  function aloita(){tyopoyta(false);puhu('bot',labels().aika);showStatus('idle');}
   function sendText(){const t=el('say').value.trim();if(!t||busy||el('send').disabled)return;el('say').value='';void submit(t);}
   el('say').addEventListener('focus',()=>tyopoyta(true));
-el('say').addEventListener('input',()=>tyopoyta(true));
-el('send').addEventListener('click',sendText);el('say').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendText();}});
-  el('mic').addEventListener('click',()=>{if(voice.session)stopVoice();else if(!busy){tyopoyta(true);void voice.start();}});window.addEventListener('pagehide',stopVoice);
-  function kasittele(d){
+  el('send').addEventListener('click',sendText);el('say').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendText();}});
+  el('mic').addEventListener('click',()=>{if(!voice.session&&!busy){tyopoyta(true);void voice.start();}});el('stopVoice').addEventListener('click',stopVoice);window.addEventListener('pagehide',stopVoice);
+  async function kasittele(d){
     d = d || {};
 
     // Гость сказал «начнём заново» — всё стирается тем же путём, что и
     // по кнопке. Отдельной ветки у голоса нет.
     if (d.nollaa) { uusiHaku(); return; }
-    const previous=SearchController.key(tila.kriteerit);
-    // Критерии только дописываются: агент не должен терять сказанное раньше.
-    if (d.kriteerit) Object.keys(d.kriteerit).forEach(function(k){
-      var v = d.kriteerit[k];
-      if (v !== "" && v !== null && v !== undefined) tila.kriteerit[k] = v;
-    });
+    const previous=SearchController.key(tila.kriteerit); const activeGeneration=generation;
+    tila.kriteerit = SearchController.apply(tila.kriteerit, d.kriteerit);
     if (d.asiakas) Object.keys(d.asiakas).forEach(function(k){
       if (d.asiakas[k]) tila.asiakas[k] = d.asiakas[k];
     });
@@ -756,16 +753,21 @@ el('send').addEventListener('click',sendText);el('say').addEventListener('keydow
     const missing=SearchController.missing(tila.kriteerit);
     const changed=previous!==SearchController.key(tila.kriteerit);
     const validChoice=tila.ehdokkaat.some(o=>o.id===d.valinta);
-    if(!missing && validChoice && !changed){valitse(d.valinta);return;}
-    if(!missing && (changed || !tila.searched)){
+    if(!missing && !d.clarify && validChoice && !changed){await voice.stop();if(activeGeneration===generation)valitse(d.valinta);return "results";}
+    if(!missing && !d.clarify && (changed || !tila.searched)){
       showStatus('searching');
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      if(activeGeneration!==generation)return;
       etsi(); piirraKortit(); tila.searched=true; tyopoyta(false);
       if(tila.vaihe===2)vaihe(1);
+      await voice.stop();
+      if(activeGeneration!==generation)return;
       const answer=labels().results;
       puhu('bot',answer);tila.historia.push({role:'model',parts:[{text:answer}]});
-      return;
+      return 'results';
     }
-    const answer=missing?labels()[missing]:(d.kysymys||labels().results);
+    if(missing || d.clarify)tila.searched=false;
+    const answer=d.kysymys||(missing?labels()[missing]:labels().results);
     puhu('bot',answer);tila.historia.push({role:'model',parts:[{text:answer}]});
   }
   /* ---------- галерея ----------
