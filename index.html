@@ -522,6 +522,8 @@
 </div>
 
 
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/bundle.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -958,7 +960,8 @@
   function etsi(){
     var k = tila.kriteerit;
     var hlo = henkilomaara();
-    var budj = parseInt(String(k.budjetti||"").replace(/\D/g,""), 10) || 0;
+    var budj = Number(k.hinta_max || 0);
+    var minBudj = Number(k.hinta_min || 0);
     var yot = oita(k.saapuminen, k.lahto);
 
     var lista = OBJEKTIT.filter(function(o){
@@ -966,8 +969,8 @@
       // Бюджет гость называет как придётся — за поездку или за сутки.
       // Считаем за поездку, если знаем число ночей, и даём 15 % запаса:
       // отсечь по копейкам хуже, чем показать на один вариант больше.
-      if (budj && yot && o.hinta_vrk * yot > budj * 1.15) return false;
-      if (budj && !yot && o.hinta_vrk > budj * 1.15) return false;
+      if (budj && o.hinta_vrk > budj) return false;
+      if (minBudj && o.hinta_vrk < minBudj) return false;
       return true;
     });
 
@@ -1228,6 +1231,7 @@
      Одна и та же работа для кнопки под результатом и для кнопки на экране
      подтверждения, поэтому она здесь одна. */
   function uusiHaku(){
+    stopVoice();
     if(window.speechSynthesis) speechSynthesis.cancel();
     tila = { kriteerit:{}, historia:[], ehdokkaat:[], valittu:null, lisat:{}, asiakas:{}, vaihe:1 };
     el("puhelu").innerHTML = "";
@@ -1324,7 +1328,7 @@
   }
   function korvaaAani(){} // history is text only
   function speakAnswer(text){
-    if (!text || !window.speechSynthesis || !window.SpeechSynthesisUtterance || !document.getElementById("voiceReply").checked) return;
+    if (voiceSession || !text || !window.speechSynthesis || !window.SpeechSynthesisUtterance || !document.getElementById("voiceReply").checked) return;
     speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(text);u.lang=el("kieli").value; speechSynthesis.speak(u);
   }
 
@@ -1389,517 +1393,37 @@
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText(); }
   });
 
-  /* ---------- ГОЛОС ----------
+  var voiceLabel=document.createElement('label'); voiceLabel.style.cssText='display:block;text-align:center;font-size:12px;color:#808080'; voiceLabel.innerHTML='<input type="checkbox" id="voiceReply"> 🔊'; el('st').after(voiceLabel);
+  var voiceSession=null, starting=false, processing=false, mr=null;
+  var diag={};
+  var voiceLog=document.createElement('pre'); voiceLog.style.cssText='white-space:pre-wrap;font-size:11px;color:#888'; voiceLabel.after(voiceLog); voiceLog.hidden=!location.search.includes('diag=1');
+  function diagNayta(){voiceLog.textContent=JSON.stringify(diag,null,2);}
+  function voiceStatus(t){el('st').textContent=t;diag.vaihe=t;diagNayta();}
+  function closeVoice(s){if(s.stream)s.stream.getTracks().forEach(t=>t.stop());}
+  function stopVoice(){const s=voiceSession;voiceSession=null;starting=false;el('mic').classList.remove('rec');if(s){closeVoice(s);if(s.detector)Promise.resolve(s.detector.pause()).catch(()=>{});} }
+function wav(samples){const b=new ArrayBuffer(44+samples.length*2),v=new DataView(b);const str=(p,t)=>{for(let i=0;i<t.length;i++)v.setUint8(p+i,t.charCodeAt(i));};str(0,'RIFF');v.setUint32(4,b.byteLength-8,true);str(8,'WAVE');str(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,16000,true);v.setUint32(28,32000,true);v.setUint16(32,2,true);v.setUint16(34,16,true);str(36,'data');v.setUint32(40,samples.length*2,true);for(let i=0;i<samples.length;i++){const x=Math.max(-1,Math.min(1,samples[i]));v.setInt16(44+2*i,x<0?x*32768:x*32767,true);}return new Uint8Array(b);}
+function base64(bytes){let chunks=[];for(let i=0;i<bytes.length;i+=8192)chunks.push(String.fromCharCode(...bytes.subarray(i,i+8192)));return btoa(chunks.join(''));}
 
-     ПЕРЕНЕСЕНО ИЗ РАБОТАЮЩЕГО ПРОЕКТА job\site\index.html 27.11.2026,
-     дословно, вместе с порогами и обходами. Своего здесь нет.
-
-     Почему так, а не как было: прежний голос offerhut пересчитывал
-     частоту выбрасыванием отсчётов, от этого речь дребезжала и
-     распознавалась плохо; конца фразы он не слышал вовсе — держи
-     кнопку или жди сорока секунд; тихую запись отправлял на платный
-     вызов. В job всё это решено, и решение проверено временем.
-
-       MediaRecorder + слежение за громкостью -> WAV 16 кГц через
-       OfflineAudioContext -> base64 -> воркер -> распознавание -> модель
-  */
-
-  /* РУЧНОЙ РЕЖИМ ДЛЯ ПРОВЕРКИ.
-
-     Адрес с ?kasin=1 выключает слежение за громкостью: запись идёт от
-     нажатия до нажатия. Нужен, чтобы отделить поломку звукового
-     анализа от поломки самой записи — на чужом телефоне иначе не
-     понять, что именно не работает. */
-  var voiceLabel=document.createElement("label"); voiceLabel.style.cssText="display:block;text-align:center;font-size:12px;color:#808080"; voiceLabel.innerHTML='<input type="checkbox" id="voiceReply"> 🔊'; el("st").after(voiceLabel);
-  var KASIN = /[?&]kasin=1/.test(location.search);
-  // ?diag=1 — строка состояния видна всё время и обновляется на каждом
-  // шаге. Долгое нажатие на телефоне ненадёжно: браузер перехватывает
-  // его раньше страницы.
-  var DIAG = /[?&]diag=1/.test(location.search);
-
-  var MAX_SECONDS  = 45;     // потолок записи
-  var HUSH_MS      = 1300;   // столько тишины после речи = конец фразы
-  var SPEAK_LEVEL  = 0.018;  // выше этого считаем, что говорят
-  var MIN_SPEAK_MS = 400;    // короче — случайное нажатие
-  var HILJAINEN    = 0.005;  // тише этого не отправляем вовсе
-
-  var mr = null, chunks = [], stream = null, stopTimer = null;
-  var vadCtx = null, vadTimer = null, lastRms = 0, vaimea = 0;
-  var vadNode = null, vadAn = null;
-
-  /* ---------- телефоны ----------
-     Safari на iPhone и Chrome на Android ведут себя по-разному, и
-     страница должна разобраться сама — спрашивать человека, какой у
-     него телефон, нельзя.
-
-     1. ЗВУКОВОЙ КОНТЕКСТ. На iOS он создаётся спящим и просыпается
-        только внутри жеста. Спящий контекст не даёт анализатору
-        данных: громкость всегда ноль, конец фразы не слышен, запись
-        висит до сорока пяти секунд. Поэтому контекст один на всю
-        страницу, и будим мы его прямо в обработчике нажатия.
-
-     2. ФОРМАТ ЗАПИСИ. Safari пишет audio/mp4, Chrome — webm/opus.
-        Спрашиваем у браузера, что он умеет, и не навязываем своего.
-        Воркер формат узнаёт по самим байтам, так что любой подойдёт.
-
-     3. ЕСЛИ АНАЛИЗАТОР ВСЁ ЖЕ МОЛЧИТ — не держим человека сорок пять
-        секунд, а говорим, что отправить надо повторным нажатием. */
-  var yhteinenCtx = null;
-
-  /* ЧЕТЫРЕ ВАРИАНТА, по которым приходят к этой странице:
-
-       windows   ПК на Windows, Chrome или Edge
-       macos     Макбук, Safari или Chrome
-       android   телефон на Android, Chrome
-       ios       айфон и айпад, любой браузер — внутри всегда WebKit
-
-     Различается не оформление, а три вещи: даёт ли браузер второй
-     звуковой контекст, в каком формате пишет и просыпается ли звук
-     без жеста. На айфоне и макбуке за это отвечает WebKit, поэтому
-     они ведут себя схоже и отличаются от Windows и Android.
-
-     Определяем по тому, что браузер о себе говорит, и проверяем
-     отпечатком касаний: айпад с клавиатурой называет себя макбуком,
-     и отличить его можно только по тому, что экран у него сенсорный. */
-  var LAITE = (function(){
-    var ua = String(navigator.userAgent || "");
-    var alusta = String((navigator.userAgentData && navigator.userAgentData.platform)
-                        || navigator.platform || "");
-    var kosketus = (navigator.maxTouchPoints || 0) > 1;
-
-    var ios = /iPhone|iPod/.test(ua)
-           || /iPad/.test(ua)
-           || (/Mac/.test(alusta) && kosketus);        // айпад, зовущий себя маком
-    var android = /Android/.test(ua);
-    var macos = !ios && (/Mac/.test(alusta) || /Macintosh/.test(ua));
-    var windows = /Win/.test(alusta) || /Windows/.test(ua);
-
-    var webkit = ios || (macos && /Safari/.test(ua) && !/Chrome|Chromium|Edg/.test(ua));
-
-    return {
-      jarjestelma: ios ? "ios" : android ? "android"
-                 : macos ? "macos" : windows ? "windows" : "muu",
-      mobiili: ios || android,
-      webkit: webkit,
-      // WebKit даёт один звуковой контекст на страницу и будит его
-      // только внутри жеста человека
-      yksiKonteksti: webkit,
-      herataKosketuksesta: webkit
-    };
-  })();
-
-  function aaniCtx(){
-    var AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return null;
-    if (!yhteinenCtx || yhteinenCtx.state === "closed"){
-      try { yhteinenCtx = new AC(); }
-      catch(e){
-        // На WebKit второго контекста не дадут вовсе: работаем без
-        // слежения за громкостью, запись закончится нажатием.
-        yhteinenCtx = null;
-        return null;
-      }
-    }
-    if (yhteinenCtx.state === "suspended" && yhteinenCtx.resume){
-      // отказ пробуждения глушим: иначе он всплывает как
-      // необработанный и попадает в диагностику чужой ошибкой
-      try {
-        var p = yhteinenCtx.resume();
-        if (p && typeof p.catch === "function") p.catch(function(){});
-      } catch(e){}
-    }
-    return yhteinenCtx;
+  async function startVoice(){
+    if(voiceSession||busy||processing)return;
+    const s={stream:null,detector:null};voiceSession=s;starting=true;voiceStatus('Microphone…');
+    try{
+      const t=performance.now();
+      const stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,autoGainControl:true,noiseSuppression:true}});
+      if(voiceSession!==s){stream.getTracks().forEach(t=>t.stop());return;}
+      s.stream=stream;diag.lupaMs=((performance.now()-t)/1000).toFixed(2)+'s';voiceStatus('Silero…');
+      const v=await vad.MicVAD.new({baseAssetPath:'https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/',onnxWASMBasePath:'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/',getStream:async()=>s.stream,onSpeechStart:()=>{if(voiceSession===s&&!busy&&!processing)voiceStatus('●');},onVADMisfire:()=>{if(voiceSession===s&&!busy&&!processing)voiceStatus(T('s_lyhyt'));},onSpeechEnd:async audio=>{
+        if(voiceSession!==s||busy||processing)return;
+        processing=true;const state=tila;
+        try{if(audio.length>16000*90)throw Error('Audio > 90s');diag.kesto=(audio.length/16000).toFixed(2);voiceStatus('AI…');await laheta([{inlineData:{mimeType:'audio/wav',data:base64(wav(audio))}}],'…');}
+        catch(e){diag.virhe=String(e);diagNayta();}
+        finally{processing=false;if(voiceSession===s&&state===tila)voiceStatus('🎙');}
+      }});
+      s.detector=v;if(voiceSession!==s){await v.pause();closeVoice(s);return;}await v.start();if(voiceSession!==s){await v.pause();closeVoice(s);return;}starting=false;el('mic').classList.add('rec');voiceStatus('🎙');
+    }catch(e){if(voiceSession===s){stopVoice();diag.virhe=String(e);voiceStatus(T('yhteys'));}}
   }
-
-  /* ---------- диагностика ----------
-     Строка, по которой видно, что страница определила и где встала.
-     Показывается под микрофоном при сбое и по долгому нажатию на
-     кнопку — чтобы её можно было прочитать и переслать. */
-  var diag = { vaihe: "-", muoto: "-", ctx: "-", rms: "-", virhe: "",
-               kesto: "-", koko: "-", wav: "-", vastaus: "-", alkoi: 0,
-               stt: "-", malli: "-", tila: "auto", tuki: "-", lupa: "?",
-               lupaMs: "-" };
-
-  /* Разрешение на микрофон браузер спрашивает ОДИН раз. Если ответили
-     «нет», он молча отказывает и больше не спрашивает — со стороны
-     страница выглядит мёртвой. Поэтому состояние выясняем заранее и
-     держим в строке: granted — дали, denied — отказано навсегда,
-     prompt — спросит при нажатии. */
-  function lupaTila(){
-    if (!navigator.permissions || !navigator.permissions.query) return;
-    try {
-      navigator.permissions.query({ name: "microphone" }).then(function(p){
-        diag.lupa = p.state;
-        if (p.state === "denied" && typeof diagNayta === "function") diagNayta();
-        p.onchange = function(){ diag.lupa = p.state; };
-      }).catch(function(){ diag.lupa = "ei-tietoa"; });
-    } catch(e){ diag.lupa = "ei-tietoa"; }
-  }
-
-  function diagTeksti(){
-    return [LAITE.jarjestelma,
-            LAITE.webkit ? "webkit" : "chromium",
-            "tuki:" + diag.tuki,
-            "lupa:" + diag.lupa,
-            "lupaMs:" + (diag.lupaMs || "-"),
-            "muoto:" + String(diag.muoto).replace("audio/", ""),
-            "ctx:" + diag.ctx,
-            "rms:" + diag.rms,
-            "kesto:" + diag.kesto,
-            "koko:" + diag.koko,
-            "wav:" + diag.wav,
-            "stt:" + diag.stt,
-            "malli:" + diag.malli,
-            "vastaus:" + diag.vastaus,
-            "tila:" + diag.tila,
-            "vaihe:" + diag.vaihe,
-            diag.virhe ? "virhe:" + diag.virhe : ""].filter(Boolean).join(" · ");
-  }
-
-  function diagNayta(){
-    el("st").textContent = diagTeksti();
-  }
-
-  // в режиме ?diag=1 строку показываем постоянно
-  function diagTikita(){
-    if (!DIAG) return;
-    diagNayta();
-    setTimeout(diagTikita, 700);
-  }
-
-  function nauhoitusMuoto(){
-    if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return "";
-    // Порядок зависит от варианта: WebKit пишет mp4 и webm не умеет,
-    // Chrome на Windows и Android наоборот. Спрашиваем браузер, но
-    // начинаем с того, что для него родное.
-    var ehdot = LAITE.webkit
-      ? ["audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/aac",
-         "audio/webm;codecs=opus", "audio/webm"]
-      : ["audio/webm;codecs=opus", "audio/webm",
-         "audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/aac"];
-    for (var i=0;i<ehdot.length;i++){
-      try { if (MediaRecorder.isTypeSupported(ehdot[i])) return ehdot[i]; }
-      catch(e){}
-    }
-    return "";
-  }
-
-  function wavFromSamples(samples, rate){
-    var buf = new ArrayBuffer(44 + samples.length * 2);
-    var v = new DataView(buf);
-    function put(o, s){ for (var i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); }
-    put(0,"RIFF");  v.setUint32(4, 36 + samples.length*2, true);
-    put(8,"WAVE");  put(12,"fmt ");
-    v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
-    v.setUint32(24,rate,true); v.setUint32(28,rate*2,true);
-    v.setUint16(32,2,true); v.setUint16(34,16,true);
-    put(36,"data"); v.setUint32(40, samples.length*2, true);
-    var o = 44;
-    for (var i=0;i<samples.length;i++,o+=2){
-      var s = Math.max(-1, Math.min(1, samples[i]));
-      v.setInt16(o, s < 0 ? s*0x8000 : s*0x7FFF, true);
-    }
-    return new Blob([buf], { type:"audio/wav" });
-  }
-
-  /* Пересчёт частоты делает сам браузер, через OfflineAudioContext.
-     Прореживание отсчётов, которое тут стояло раньше, даёт дребезг. */
-  function toWav16k(blob){
-    return blob.arrayBuffer().then(function(ab){
-      var ac = aaniCtx();
-      if (!ac) return Promise.reject(new Error("no-audio"));
-      return new Promise(function(valmis, hylkaa){
-        var p = ac.decodeAudioData(ab, valmis, hylkaa);
-        if (p && typeof p.then === "function") p.then(valmis, hylkaa);
-      }).then(function(decoded){
-        // контекст НЕ закрываем: он общий, и на iOS второй уже не дадут
-        var OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-        var off = new OAC(
-          1, Math.max(1, Math.ceil(decoded.duration * 16000)), 16000);
-        var src = off.createBufferSource();
-        src.buffer = decoded;
-        src.connect(off.destination);
-        src.start(0);
-        return off.startRendering();
-      }).then(function(out){
-        return wavFromSamples(out.getChannelData(0), 16000);
-      });
-    });
-  }
-
-  /* У чтения файла были только успешные исходы: ни onerror, ни
-     onabort. Упало чтение — обещание не разрешалось никогда. */
-  function toBase64(blob){
-    return odotuksella(new Promise(function(valmis, hylkaa){
-      var r = new FileReader();
-      r.onload = function(){
-        var data = String(r.result || "").split(",")[1];
-        if (!data) { hylkaa(new Error("tyhja aani")); return; }
-        valmis(data);
-      };
-      r.onerror = function(){ hylkaa(new Error("FileReader")); };
-      r.onabort = function(){ hylkaa(new Error("FileReader keskeytyi")); };
-      r.readAsDataURL(blob);
-    }), MUUNNOS_MS, "base64");
-  }
-
-  function stopStream(){
-    if (stopTimer){ clearTimeout(stopTimer); stopTimer = null; }
-    if (vadTimer){ clearInterval(vadTimer); vadTimer = null; }
-    // Контекст НЕ закрываем: он общий, и на айфоне второго не дадут.
-    // Закрытие здесь сводило на нет весь смысл общего контекста —
-    // вторая запись оставалась без звука.
-    //
-    // А вот узлы отключаем: источник и анализатор создаются на каждую
-    // запись, и в живом контексте они иначе копятся.
-    try { if (vadNode) vadNode.disconnect(); } catch(e){}
-    try { if (vadAn) vadAn.disconnect(); } catch(e){}
-    vadNode = null; vadAn = null;
-    vadCtx = null;
-    if (stream){ stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
-    el("mic").classList.remove("rec");
-  }
-
-  /* Микрофон тоже может не ответить: запрос разрешения иногда не
-     показывается вовсе. Ждём ограниченно, а если разрешение придёт
-     после срока — поток закрываем, иначе микрофон останется
-     включённым и человек об этом не узнает. */
-  function hankiMikrofoni(){
-    var myohassa = false;
-    var pyynto = navigator.mediaDevices.getUserMedia({
-      audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }
-    }).then(function(s){
-      if (myohassa){
-        try { s.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
-        throw new Error("mikrofoni myohassa");
-      }
-      return s;
-    });
-    return odotuksella(pyynto, MIKKI_MS, "mikrofoni").catch(function(e){
-      myohassa = true;
-      throw e;
-    });
-  }
-
-  var starting = false, processing = false;
-  function startRecording(){
-    if(starting || processing || busy) return;
-    starting=true; diag.alkoi=Date.now(); lastRms=0; vaimea=0;
-    var pyyntoAlkoi = Date.now();
-    // Три обработки включаем явно: без них в комнате с эхом запись
-    // разбирается заметно хуже.
-    diag.vaihe = "mikrofoni"; diag.virhe = "";
-    hankiMikrofoni().then(function(s){
-      starting=false; stream = s;
-      // сколько браузер думал над разрешением — это и есть та задержка
-      diag.lupaMs = (((Date.now() - pyyntoAlkoi) / 1000) || 0).toFixed(1) + "s";
-      diag.vaihe = "nauhoitus";
-      // отложенное: синтез и опрос разрешения микрофону больше не мешают
-      if (window.speechSynthesis) { try { speechSynthesis.cancel(); } catch(e){} }
-      lupaTila();
-      chunks = [];
-      var muoto = nauhoitusMuoto();
-      diag.muoto = muoto || "oletus";
-      try { mr = muoto ? new MediaRecorder(stream, { mimeType: muoto })
-                       : new MediaRecorder(stream); }
-      catch(e){ mr = new MediaRecorder(stream); }
-      mr.onerror = function(e){ starting=false; processing=false; stopStream(); diag.virhe=String(e.error||"MediaRecorder");diagNayta(); };
-      mr.ondataavailable = function(e){ if (e.data && e.data.size) chunks.push(e.data); };
-      mr.onstop = function(){
-        // если анализатор молчал всю запись, судить о громкости по
-        // нему нельзя: отправим как есть, тишину поймает воркер
-        diag.vaihe = "lahetys";
-        diag.kesto = (((Date.now() - diag.alkoi) / 1000) || 0).toFixed(1);
-        var hiljaa = lastRms > 0 && lastRms < HILJAINEN;
-        stopStream();
-        el("st").textContent = T("s_kasittelen");
-        var raw = new Blob(chunks, { type: (mr && mr.mimeType) || "audio/webm" });
-        diag.koko = Math.round(raw.size / 1024) + "kt";
-        diag.muoto = (mr && mr.mimeType) || diag.muoto;
-        // Тихую запись не шлём вовсе: распознаватель, которому дали
-        // тишину, не возвращает пустоту — он выдумывает фразу.
-        if (raw.size < 1200 || hiljaa){
-          el("st").textContent = T("s_lyhyt");
-          setTimeout(function(){ el("st").textContent = ""; }, 2600);
-          starting = false; processing = false;   // не оставляем занятым
-          return;
-        }
-        processing = true;
-        /* ОДИН ПУТЬ НА ВСЕ ИСХОДЫ, и флаги снимаются в конце при любом
-           из них. Раньше ветки расходились — удачный пересчёт,
-           неудачный, отказ чтения — и в каждой флаг снимался
-           по-своему, а кое-где не снимался вовсе: тогда кнопка
-           оставалась мёртвой.
-
-           Пересчёт звука тоже со сроком: не вышел — отправляем запись
-           как есть. Формат, который браузер не декодирует, модель всё
-           равно читает, а сказанное терять нельзя. */
-        (function(){
-          var alkoi = Date.now();
-          var state = tila;
-          var aani = raw;
-
-          diag.vaihe = "muunnos";
-          odotuksella(toWav16k(raw), MUUNNOS_MS, "wav").then(function(wav){
-            aani = wav;
-          }, function(){
-            aani = raw;          // не вышло — шлём исходную запись
-          }).then(function(){
-            diag.wav = ((Date.now() - alkoi) / 1000).toFixed(1) + "s";
-            diag.vaihe = "base64";
-            return toBase64(aani);
-          }).then(function(b64){
-            if (state !== tila) return;    // разговор успели начать заново
-            diag.vaihe = "lahetys";
-            el("st").textContent = "";
-            return laheta([{ inlineData:{ mimeType: aani.type || "audio/webm",
-                                          data: b64 } }], "\u2026");
-          }).then(function(){
-            if (diag.vaihe !== "virhe") diag.vaihe = "valmis";
-          }).catch(function(e){
-            diag.virhe = String((e && (e.message || e.name)) || e).slice(0, 60);
-            diag.vaihe = "virhe";
-            diagNayta();
-          }).then(function(){
-            starting = false;
-            processing = false;
-          });
-        })();
-      };
-
-      /* Слушаем громкость и останавливаемся сами, когда человек
-         замолчал: никто не догадается выключать микрофон повторным
-         нажатием. Заодно показываем уровень — видно, что слышат. */
-      vadCtx = KASIN ? null : aaniCtx();
-      diag.ctx = vadCtx ? vadCtx.state : (KASIN ? "kasin" : "ei saatu");
-      diag.tila = KASIN ? "kasin" : "auto";
-      if (!vadCtx){
-        // без звукового контекста конец фразы не услышать: тогда
-        // запись идёт до повторного нажатия, и мы прямо так и пишем
-        mr.start();
-        el("mic").classList.add("rec");
-        el("st").textContent = T("s_kuuntelen") + " · " + T("s_valmis");
-        opastusPois();
-        stopTimer = setTimeout(function(){
-          if (mr && mr.state === "recording") mr.stop();
-        }, MAX_SECONDS * 1000);
-        return;
-      }
-      var node = vadCtx.createMediaStreamSource(stream);
-      var an = vadCtx.createAnalyser();
-      an.fftSize = 1024;
-      node.connect(an);
-      vadNode = node; vadAn = an;      // чтобы было что отключить
-      var buf = new Uint8Array(an.fftSize);
-
-      var alku = Date.now();
-      diag.alkoi = alku;
-      var spoke = false, hush = 0, peak = 0;
-      lastRms = 0; vaimea = 0;
-
-      vadTimer = setInterval(function(){
-        an.getByteTimeDomainData(buf);
-        var sum = 0;
-        for (var i=0;i<buf.length;i++){ var d = (buf[i]-128)/128; sum += d*d; }
-        var rms = Math.sqrt(sum/buf.length);
-        if (rms > peak) peak = rms;
-        lastRms = peak;
-
-        diag.rms = rms.toFixed(3);
-        diag.ctx = vadCtx.state;
-        var sek = Math.floor((Date.now()-alku)/1000);
-        var bars = "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588";
-        var lvl = bars[Math.min(bars.length-1, Math.round(rms*70))];
-        el("st").textContent = T("s_kuuntelen") + "  " + lvl + "  " + sek + " s";
-
-        // анализатор не даёт звука вовсе — значит контекст всё-таки
-        // спит. Не держим человека сорок пять секунд.
-        if (rms === 0){
-          vaimea += 120;
-          if (vaimea >= 3000){
-            el("st").textContent = T("s_kuuntelen") + " · " + T("s_valmis");
-          }
-        } else { vaimea = 0; }
-
-        if (rms > SPEAK_LEVEL){ spoke = true; hush = 0; }
-        else if (spoke){
-          hush += 120;
-          if (hush >= HUSH_MS && Date.now()-alku > MIN_SPEAK_MS &&
-              mr.state === "recording"){
-            mr.stop();
-          }
-        }
-      }, 120);
-
-      mr.start();
-      el("mic").classList.add("rec");
-      el("st").textContent = T("s_kuuntelen");
-      opastusPois();
-      stopTimer = setTimeout(function(){
-        if (mr && mr.state === "recording") mr.stop();
-      }, MAX_SECONDS * 1000);
-    }).catch(function(e){
-      starting=false; stopStream();
-      diag.virhe = String((e && (e.name || e.message)) || e).slice(0, 40);
-      // Отказ микрофона человеку надо объяснить, остальное — показать
-      // как есть: по этой строке видно, где встало.
-      var nimi = String((e && e.name) || "");
-      if (nimi === "NotAllowedError") diag.lupa = "denied";
-      if (nimi === "NotAllowedError" || nimi === "SecurityError" ||
-          nimi === "NotFoundError" || nimi === "NotReadableError"){
-        el("st").textContent = T("s_salli") + "  (" + diagTeksti() + ")";
-      } else {
-        diagNayta();
-      }
-    });
-  }
-
-  /* Нажатие, а не удержание: запись кончается сама по тишине, но
-     повторное нажатие обрывает её сразу. */
-  (function(){
-    var mic = el("mic");
-    // Чего не хватает, говорим словами. Спрятанная кнопка со стороны
-    // выглядит как мёртвая страница, и причину не узнать.
-    var puuttuu = [];
-    if (!window.isSecureContext) puuttuu.push("ei-https");
-    if (!navigator.mediaDevices) puuttuu.push("ei-mediaDevices");
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) puuttuu.push("ei-getUserMedia");
-    if (!window.MediaRecorder) puuttuu.push("ei-MediaRecorder");
-    if (!(window.AudioContext || window.webkitAudioContext)) puuttuu.push("ei-AudioContext");
-    diag.tuki = puuttuu.length ? puuttuu.join(",") : "ok";
-
-    if (puuttuu.length){
-      // кнопку оставляем на месте: пусть при нажатии скажет, чего нет
-      mic.addEventListener("click", function(e){
-        e.preventDefault();
-        diag.virhe = "selain: " + diag.tuki;
-        diagNayta();
-      });
-      diagNayta();
-      return;
-    }
-    lupaTila();
-    diagTikita();
-    mic.addEventListener("click", function(e){
-      e.preventDefault();
-      if (busy || starting || processing) return;
-      if (mr && mr.state === "recording"){ mr.stop(); return; }
-      // МИКРОФОН ПЕРВЫМ ДЕЙСТВИЕМ. На Android замер 27.11.2026 дал
-      // двадцать секунд до появления запроса разрешения: перед ним
-      // успевали отработать создание звукового контекста и отмена
-      // синтеза речи. Браузер всё это время молчал.
-      startRecording();
-      // Звук будим сразу следом, без таймера: запрос микрофона уже
-      // ушёл синхронно, задерживать нечего, а в таймере жест теряется.
-      if (!KASIN) aaniCtx();
-    });
-    mic.addEventListener("contextmenu", function(e){
-      // долгое нажатие на телефоне и правый щелчок на ПК
-      e.preventDefault();
-      diagNayta();
-    });
-  })();
-
+  el('mic').addEventListener('click',e=>{e.preventDefault();if(voiceSession){stopVoice();voiceStatus('■');}else if(!busy&&!processing)void startVoice();});
+  window.addEventListener('pagehide',stopVoice);
   /* ---------- галерея ----------
      Перенесено с visuals.ai-craft-studio.com без изменений в логике.
      Что здесь важно и чего я сам не сделал бы:
