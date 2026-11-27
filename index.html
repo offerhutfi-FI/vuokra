@@ -458,7 +458,7 @@
           <!-- Лента разговора: вопрос агента и ответ гостя. Прокручивается,
                старое уходит вверх. -->
           <div class="loki" id="puhelu"></div>
-          <textarea class="say" id="say" rows="2" placeholder="Pidä nappia pohjassa ja puhu — tai kirjoita"></textarea>
+          <textarea class="say" id="say" rows="2" placeholder="Paina nappia ja puhu — tai kirjoita"></textarea>
           <button class="send" id="send" aria-label="Lähetä">&#8593;</button>
         </div>
         <button class="mic" id="mic" aria-label="Puhu">
@@ -681,7 +681,7 @@
      с сайта и переводятся на его стороне. */
   var TEKSTIT = {
     fi: {
-      ph:"Pidä nappia pohjassa ja puhu — tai kirjoita",
+      ph:"Paina nappia ja puhu — tai kirjoita",
       hakutulos:"Hakutulos", kysymys:"Kysymys",
       e_aika:"Ajankohta", e_alue:"Alue", e_hinta:"Hinta /vrk", e_vieraat:"Vieraat",
       t_aika:"pp.kk. – pp.kk.", t_alue:"koko Suomi", t_hinta:"mistä – mihin", t_vieraat:"kuinka monta",
@@ -691,8 +691,8 @@
       l_nimi:"Nimi", l_posti:"Sähköposti", l_puhelin:"Puhelin",
       vahvistettu:"Varaus vahvistettu", yhteensa:"Yhteensä", sisaltyy:"sisältyy",
       paikalla:"paikan päällä", veloituksetta:"veloituksetta",
-      s_kuuntelen:"Kuuntelen", s_valmis:"irrota kun olet valmis", s_kasittelen:"Käsittelen…",
-      s_lyhyt:"Liian lyhyt. Pidä nappia pohjassa ja puhu.",
+      s_yhdistaa:"Yhdistetään…", s_kuuntelen:"Kuuntelen", s_valmis:"paina uudestaan kun lopetat", s_kasittelen:"Käsittelen…",
+      s_lyhyt:"Liian lyhyt. Paina nappia ja puhu.",
       s_ei_tue:"Selaimesi ei tue äänitallennusta. Kirjoita tähän.",
       s_salli:"Salli mikrofoni selaimen asetuksista.",
       s_virhe:"Äänen käsittely ei onnistunut. Kirjoita tähän.",
@@ -708,7 +708,7 @@
       vihje_muuta:"Voit muuttaa hakuehtoja puhumalla — sano vain."
     },
     sv: {
-      ph:"Håll knappen intryckt och tala — eller skriv",
+      ph:"Tryck på knappen och tala — eller skriv",
       hakutulos:"Sökresultat", kysymys:"Fråga",
       e_aika:"Tidpunkt", e_alue:"Område", e_hinta:"Pris /dygn", e_vieraat:"Gäster",
       t_aika:"dd.mm. – dd.mm.", t_alue:"hela Finland", t_hinta:"från – till", t_vieraat:"hur många",
@@ -718,8 +718,8 @@
       l_nimi:"Namn", l_posti:"E-post", l_puhelin:"Telefon",
       vahvistettu:"Bokningen bekräftad", yhteensa:"Totalt", sisaltyy:"ingår",
       paikalla:"på plats", veloituksetta:"utan avgift",
-      s_kuuntelen:"Lyssnar", s_valmis:"släpp när du är klar", s_kasittelen:"Bearbetar…",
-      s_lyhyt:"För kort. Håll knappen intryckt och tala.",
+      s_yhdistaa:"Ansluter…", s_kuuntelen:"Lyssnar", s_valmis:"tryck igen när du slutar", s_kasittelen:"Bearbetar…",
+      s_lyhyt:"För kort. Tryck på knappen och tala.",
       s_ei_tue:"Din webbläsare stöder inte ljudinspelning. Skriv här.",
       s_salli:"Tillåt mikrofonen i webbläsarens inställningar.",
       s_virhe:"Ljudet kunde inte behandlas. Skriv här.",
@@ -735,7 +735,7 @@
       vihje_muuta:"Du kan ändra sökvillkoren genom att tala — säg bara till."
     },
     en: {
-      ph:"Hold the button and speak — or type",
+      ph:"Tap the button and speak — or type",
       hakutulos:"Search result", kysymys:"Question",
       e_aika:"Dates", e_alue:"Area", e_hinta:"Price /night", e_vieraat:"Guests",
       t_aika:"dd.mm. – dd.mm.", t_alue:"all Finland", t_hinta:"from – to", t_vieraat:"how many",
@@ -745,8 +745,8 @@
       l_nimi:"Name", l_posti:"Email", l_puhelin:"Phone",
       vahvistettu:"Booking confirmed", yhteensa:"Total", sisaltyy:"included",
       paikalla:"paid on site", veloituksetta:"free of charge",
-      s_kuuntelen:"Listening", s_valmis:"release when ready", s_kasittelen:"Processing…",
-      s_lyhyt:"Too short. Hold the button and speak.",
+      s_yhdistaa:"Connecting…", s_kuuntelen:"Listening", s_valmis:"tap again to end", s_kasittelen:"Processing…",
+      s_lyhyt:"Too short. Tap the button and speak.",
       s_ei_tue:"Your browser does not support recording. Type here.",
       s_salli:"Allow the microphone in your browser settings.",
       s_virhe:"Could not process the audio. Type here.",
@@ -772,7 +772,7 @@
       l_nimi:"Name", l_posti:"E-Mail", l_puhelin:"Telefon",
       vahvistettu:"Buchung bestätigt", yhteensa:"Gesamt", sisaltyy:"inbegriffen",
       paikalla:"vor Ort zu zahlen", veloituksetta:"kostenlos",
-      s_kuuntelen:"Ich höre zu", s_valmis:"loslassen, wenn fertig", s_kasittelen:"Verarbeite…",
+      s_yhdistaa:"Verbinde…", s_kuuntelen:"Ich höre zu", s_valmis:"erneut tippen zum Beenden", s_kasittelen:"Verarbeite…",
       s_lyhyt:"Zu kurz. Taste halten und sprechen.",
       s_ei_tue:"Ihr Browser unterstützt keine Aufnahme. Bitte tippen.",
       s_salli:"Mikrofon in den Browsereinstellungen erlauben.",
@@ -789,7 +789,7 @@
       vihje_muuta:"Sie können die Suche per Sprache ändern — sagen Sie es einfach."
     },
     fr: {
-      ph:"Maintenez le bouton et parlez — ou écrivez",
+      ph:"Appuyez sur le bouton et parlez — ou écrivez",
       hakutulos:"Résultat", kysymys:"Question",
       e_aika:"Dates", e_alue:"Région", e_hinta:"Prix /nuit", e_vieraat:"Voyageurs",
       t_aika:"jj.mm. – jj.mm.", t_alue:"toute la Finlande", t_hinta:"de – à", t_vieraat:"combien",
@@ -799,8 +799,8 @@
       l_nimi:"Nom", l_posti:"E-mail", l_puhelin:"Téléphone",
       vahvistettu:"Réservation confirmée", yhteensa:"Total", sisaltyy:"inclus",
       paikalla:"à régler sur place", veloituksetta:"sans frais",
-      s_kuuntelen:"J’écoute", s_valmis:"relâchez quand c’est fini", s_kasittelen:"Traitement…",
-      s_lyhyt:"Trop court. Maintenez le bouton et parlez.",
+      s_yhdistaa:"Connexion…", s_kuuntelen:"J’écoute", s_valmis:"appuyez à nouveau pour finir", s_kasittelen:"Traitement…",
+      s_lyhyt:"Trop court. Appuyez sur le bouton et parlez.",
       s_ei_tue:"Votre navigateur ne gère pas l’enregistrement. Écrivez ici.",
       s_salli:"Autorisez le micro dans les réglages du navigateur.",
       s_virhe:"Impossible de traiter l’audio. Écrivez ici.",
@@ -1342,19 +1342,163 @@
      стоить записи. */
   var rec=null, chunks=[], stream=null, t0=0, ticker=null;
 
-  /* Удержание, а не нажатие: держишь — говоришь, отпустил — ушло.
-     Не надо помнить, что кнопку жмут второй раз. contextmenu гасим:
+  /* ---------- живой разговор (WebRTC) ----------
+   *
+   * Голос идёт из браузера прямо в OpenAI, минуя воркер: воркер выдаёт
+   * только короткоживущий ключ. Модель слышит речь по ходу, сама ловит
+   * паузу и отвечает примерно через секунду.
+   *
+   * Так заменена прежняя схема «держи кнопку — запись — отправка
+   * файлом». Та давала 30 секунд до ответа и плохой разбор речи:
+   * запись разворачивалась в несжатый WAV и пересэмплировалась
+   * выбрасыванием отсчётов, отчего голос дребезжал. Здесь ничего не
+   * пересобирается — звук идёт как есть.
+   *
+   * Критерии приходят не текстом, а вызовом функции paivita_haku, и
+   * уходят в тот же kasittele(), что и в пакетном режиме.
+   */
+  var rt = { pc:null, dc:null, aani:null, paalla:false, yhdistaa:false };
+
+  function rtTila(teksti){ el("st").textContent = teksti; }
+
+  function rtKatkaise(){
+    try { if (rt.dc) rt.dc.close(); } catch(e){}
+    try { if (rt.pc) rt.pc.close(); } catch(e){}
+    if (rt.aani) { try { rt.aani.srcObject = null; } catch(e){} }
+    rt.pc = null; rt.dc = null; rt.paalla = false; rt.yhdistaa = false;
+    el("mic").classList.remove("rec");
+    rtTila("");
+  }
+
+  function rtYhdista(){
+    if (rt.paalla || rt.yhdistaa) { rtKatkaise(); return; }
+    if (!window.RTCPeerConnection || !navigator.mediaDevices){
+      rtTila(T("s_ei_tue"));
+      return;
+    }
+    rt.yhdistaa = true;
+    rtTila(T("s_yhdistaa") || "…");
+
+    var ek = "", malli = "";
+    fetch(API, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        mode:"realtime_key",
+        kieli: (el("kieli") ? el("kieli").value : "fi")
+      })
+    })
+    .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+    .then(function(d){
+      if (!d || !d.avain) throw new Error(d && d.error || "no key");
+      ek = d.avain; malli = d.malli;
+      return anna();
+    })
+    .then(function(s){
+      var pc = new RTCPeerConnection();
+      rt.pc = pc;
+
+      // голос модели
+      if (!rt.aani){
+        rt.aani = document.createElement("audio");
+        rt.aani.autoplay = true;
+        document.body.appendChild(rt.aani);
+      }
+      pc.ontrack = function(e){ rt.aani.srcObject = e.streams[0]; };
+
+      // микрофон
+      s.getAudioTracks().forEach(function(t){ pc.addTrack(t, s); });
+
+      // события: по этому каналу приходят и расшифровка речи, и вызовы функции
+      var dc = pc.createDataChannel("oai-events");
+      rt.dc = dc;
+      dc.onopen = function(){
+        rt.paalla = true; rt.yhdistaa = false;
+        el("mic").classList.add("rec");
+        rtTila(T("s_kuuntelen"));
+        opastusPois();
+      };
+      dc.onmessage = function(e){ rtTapahtuma(e.data); };
+      dc.onclose = function(){ rtKatkaise(); };
+
+      return pc.createOffer().then(function(offer){
+        return pc.setLocalDescription(offer).then(function(){ return offer; });
+      });
+    })
+    .then(function(offer){
+      // рукопожатие идёт на /v1/realtime/calls: прежний /v1/realtime
+      // отключён и отвечает «Realtime Beta API is no longer supported»
+      return fetch("https://api.openai.com/v1/realtime/calls?model="
+                   + encodeURIComponent(malli), {
+        method:"POST",
+        headers:{ "Authorization":"Bearer "+ek, "Content-Type":"application/sdp" },
+        body: offer.sdp
+      });
+    })
+    .then(function(r){ if(!r.ok) throw new Error("SDP "+r.status); return r.text(); })
+    .then(function(sdp){
+      return rt.pc.setRemoteDescription({ type:"answer", sdp: sdp });
+    })
+    .catch(function(e){
+      rtKatkaise();
+      puhu("bot", T("yhteys"));
+      rtTila(String(e && e.message || e));
+    });
+  }
+
+  function rtTapahtuma(raaka){
+    var t = null;
+    try { t = JSON.parse(raaka); } catch(e){ return; }
+    if (!t || !t.type) return;
+
+    // что услышали от гостя — показываем в ленте его словами
+    if (t.type === "conversation.item.input_audio_transcription.completed"){
+      if (t.transcript && t.transcript.trim()) puhu("me", t.transcript.trim());
+      return;
+    }
+    // что ответила модель — текстом рядом со звуком
+    if (t.type === "response.output_audio_transcript.done"){
+      if (t.transcript && t.transcript.trim()) puhu("bot", t.transcript.trim());
+      return;
+    }
+    // критерии: модель вызвала функцию
+    if (t.type === "response.function_call_arguments.done"){
+      var a = null;
+      try { a = JSON.parse(t.arguments || "{}"); } catch(e){ a = null; }
+      if (!a) return;
+      kasittele({
+        kriteerit: {
+          saapuminen:a.saapuminen, lahto:a.lahto, alue:a.alue,
+          hinta_min:a.hinta_min, hinta_max:a.hinta_max,
+          aikuiset:a.aikuiset, lapset:a.lapset, muuta:a.muuta
+        },
+        valmis:  String(a.valmis) === "true",
+        valinta: a.valinta || "",
+        nollaa:  String(a.nollaa) === "true"
+      });
+      // ответ функции обязателен, иначе модель ждёт его и молчит
+      if (rt.dc && rt.dc.readyState === "open"){
+        rt.dc.send(JSON.stringify({
+          type:"conversation.item.create",
+          item:{ type:"function_call_output", call_id:t.call_id, output:"ok" }
+        }));
+      }
+      return;
+    }
+    if (t.type === "error"){
+      rtTila((t.error && t.error.message) || "error");
+    }
+  }
+
+  /* Нажатие, а не удержание: разговор идёт живьём, паузу ловит модель.
+     Первое нажатие соединяет, второе кладёт трубку. contextmenu гасим:
      на телефоне долгое нажатие иначе открывает меню. */
   (function(){
     var mic = el("mic");
-    mic.addEventListener("pointerdown", function(e){
-      if (busy) return;
+    mic.addEventListener("click", function(e){
       e.preventDefault();
-      startRec();
+      rtYhdista();
     });
-    function lopeta(){ if (rec && rec.state === "recording") stopRec(); }
-    document.addEventListener("pointerup", lopeta);
-    document.addEventListener("pointercancel", lopeta);
     mic.addEventListener("contextmenu", function(e){ e.preventDefault(); });
   })();
 
