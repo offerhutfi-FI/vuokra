@@ -1247,8 +1247,31 @@
      { kriteerit:{...}, kysymys:"...", valmis:bool, valinta:"o2", asiakas:{...} } */
   var busy = false;
 
+  /* У каждого запроса свой срок. Без него молчащий ответ держит флаг
+     занятости навсегда, и после первой реплики интерфейс перестаёт
+     отвечать — замечено на Android 27.11.2026. */
+  var ODOTUS_MS = 60000;
+
+  function fetchAikarajalla(osoite, asetukset, ms){
+    var ohjain = window.AbortController ? new AbortController() : null;
+    var kello = setTimeout(function(){
+      if (ohjain) ohjain.abort();
+    }, ms || ODOTUS_MS);
+    var mukana = Object.assign({}, asetukset);
+    if (ohjain) mukana.signal = ohjain.signal;
+    return fetch(osoite, mukana).then(function(r){
+      clearTimeout(kello);
+      return r;
+    }, function(e){
+      clearTimeout(kello);
+      // прерванный по сроку запрос должен выглядеть понятно
+      if (e && (e.name === "AbortError")) throw new Error("aikakatkaisu");
+      throw e;
+    });
+  }
+
   async function apiCall(body){
-    const r = await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const r = await fetchAikarajalla(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const d = await r.json();
     if (!r.ok || d.error) throw new Error([d.error,d.vaihe,d.status,d.syy].filter(Boolean).join(" ") || "HTTP "+r.status);
     return d;
@@ -1369,6 +1392,10 @@
      понять, что именно не работает. */
   var voiceLabel=document.createElement("label"); voiceLabel.style.cssText="display:block;text-align:center;font-size:12px;color:#808080"; voiceLabel.innerHTML='<input type="checkbox" id="voiceReply"> 🔊'; el("st").after(voiceLabel);
   var KASIN = /[?&]kasin=1/.test(location.search);
+  // ?diag=1 — строка состояния видна всё время и обновляется на каждом
+  // шаге. Долгое нажатие на телефоне ненадёжно: браузер перехватывает
+  // его раньше страницы.
+  var DIAG = /[?&]diag=1/.test(location.search);
 
   var MAX_SECONDS  = 45;     // потолок записи
   var HUSH_MS      = 1300;   // столько тишины после речи = конец фразы
@@ -1465,11 +1492,31 @@
      кнопку — чтобы её можно было прочитать и переслать. */
   var diag = { vaihe: "-", muoto: "-", ctx: "-", rms: "-", virhe: "",
                kesto: "-", koko: "-", wav: "-", vastaus: "-", alkoi: 0,
-               stt: "-", malli: "-", tila: "auto" };
+               stt: "-", malli: "-", tila: "auto", tuki: "-", lupa: "?",
+               lupaMs: "-" };
+
+  /* Разрешение на микрофон браузер спрашивает ОДИН раз. Если ответили
+     «нет», он молча отказывает и больше не спрашивает — со стороны
+     страница выглядит мёртвой. Поэтому состояние выясняем заранее и
+     держим в строке: granted — дали, denied — отказано навсегда,
+     prompt — спросит при нажатии. */
+  function lupaTila(){
+    if (!navigator.permissions || !navigator.permissions.query) return;
+    try {
+      navigator.permissions.query({ name: "microphone" }).then(function(p){
+        diag.lupa = p.state;
+        if (p.state === "denied" && typeof diagNayta === "function") diagNayta();
+        p.onchange = function(){ diag.lupa = p.state; };
+      }).catch(function(){ diag.lupa = "ei-tietoa"; });
+    } catch(e){ diag.lupa = "ei-tietoa"; }
+  }
 
   function diagTeksti(){
     return [LAITE.jarjestelma,
             LAITE.webkit ? "webkit" : "chromium",
+            "tuki:" + diag.tuki,
+            "lupa:" + diag.lupa,
+            "lupaMs:" + (diag.lupaMs || "-"),
             "muoto:" + String(diag.muoto).replace("audio/", ""),
             "ctx:" + diag.ctx,
             "rms:" + diag.rms,
@@ -1486,6 +1533,13 @@
 
   function diagNayta(){
     el("st").textContent = diagTeksti();
+  }
+
+  // в режиме ?diag=1 строку показываем постоянно
+  function diagTikita(){
+    if (!DIAG) return;
+    diagNayta();
+    setTimeout(diagTikita, 700);
   }
 
   function nauhoitusMuoto(){
@@ -1577,7 +1631,7 @@
   function startRecording(){
     if(starting || processing || busy) return;
     starting=true; diag.alkoi=Date.now(); lastRms=0; vaimea=0;
-    if(window.speechSynthesis) speechSynthesis.cancel();
+    var pyyntoAlkoi = Date.now();
     // Три обработки включаем явно: без них в комнате с эхом запись
     // разбирается заметно хуже.
     diag.vaihe = "mikrofoni"; diag.virhe = "";
@@ -1585,7 +1639,12 @@
       audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }
     }).then(function(s){
       starting=false; stream = s;
+      // сколько браузер думал над разрешением — это и есть та задержка
+      diag.lupaMs = (((Date.now() - pyyntoAlkoi) / 1000) || 0).toFixed(1) + "s";
       diag.vaihe = "nauhoitus";
+      // отложенное: синтез и опрос разрешения микрофону больше не мешают
+      if (window.speechSynthesis) { try { speechSynthesis.cancel(); } catch(e){} }
+      lupaTila();
       chunks = [];
       var muoto = nauhoitusMuoto();
       diag.muoto = muoto || "oletus";
@@ -1610,6 +1669,7 @@
         if (raw.size < 1200 || hiljaa){
           el("st").textContent = T("s_lyhyt");
           setTimeout(function(){ el("st").textContent = ""; }, 2600);
+          starting = false; processing = false;   // не оставляем занятым
           return;
         }
         processing=true;
@@ -1711,6 +1771,7 @@
       // Отказ микрофона человеку надо объяснить, остальное — показать
       // как есть: по этой строке видно, где встало.
       var nimi = String((e && e.name) || "");
+      if (nimi === "NotAllowedError") diag.lupa = "denied";
       if (nimi === "NotAllowedError" || nimi === "SecurityError" ||
           nimi === "NotFoundError" || nimi === "NotReadableError"){
         el("st").textContent = T("s_salli") + "  (" + diagTeksti() + ")";
@@ -1724,17 +1785,39 @@
      повторное нажатие обрывает её сразу. */
   (function(){
     var mic = el("mic");
-    if (!navigator.mediaDevices || !window.MediaRecorder){
-      mic.style.display = "none";
+    // Чего не хватает, говорим словами. Спрятанная кнопка со стороны
+    // выглядит как мёртвая страница, и причину не узнать.
+    var puuttuu = [];
+    if (!window.isSecureContext) puuttuu.push("ei-https");
+    if (!navigator.mediaDevices) puuttuu.push("ei-mediaDevices");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) puuttuu.push("ei-getUserMedia");
+    if (!window.MediaRecorder) puuttuu.push("ei-MediaRecorder");
+    if (!(window.AudioContext || window.webkitAudioContext)) puuttuu.push("ei-AudioContext");
+    diag.tuki = puuttuu.length ? puuttuu.join(",") : "ok";
+
+    if (puuttuu.length){
+      // кнопку оставляем на месте: пусть при нажатии скажет, чего нет
+      mic.addEventListener("click", function(e){
+        e.preventDefault();
+        diag.virhe = "selain: " + diag.tuki;
+        diagNayta();
+      });
+      diagNayta();
       return;
     }
+    lupaTila();
+    diagTikita();
     mic.addEventListener("click", function(e){
       e.preventDefault();
       if (busy || starting || processing) return;
-      // будим звук внутри жеста: на iOS только так и можно
-      aaniCtx();
       if (mr && mr.state === "recording"){ mr.stop(); return; }
+      // МИКРОФОН ПЕРВЫМ ДЕЙСТВИЕМ. На Android замер 27.11.2026 дал
+      // двадцать секунд до появления запроса разрешения: перед ним
+      // успевали отработать создание звукового контекста и отмена
+      // синтеза речи. Браузер всё это время молчал.
       startRecording();
+      // звук будим следом — жест ещё считается нашим
+      setTimeout(aaniCtx, 0);
     });
     mic.addEventListener("contextmenu", function(e){
       // долгое нажатие на телефоне и правый щелчок на ПК
