@@ -1357,44 +1357,118 @@
    * Критерии приходят не текстом, а вызовом функции paivita_haku, и
    * уходят в тот же kasittele(), что и в пакетном режиме.
    */
-  var rt = { pc:null, dc:null, aani:null, paalla:false, yhdistaa:false };
+  var rt = { pc:null, dc:null, aani:null, paalla:false, yhdistaa:false,
+             mittari:null, actx:null, yritykset:0, luovu:false };
 
   function rtTila(teksti){ el("st").textContent = teksti; }
 
-  function rtKatkaise(){
+  function rtKatkaise(tahallaan){
+    if (tahallaan) rt.luovu = true;          // положили трубку сами
+    rtMittariPois();
     try { if (rt.dc) rt.dc.close(); } catch(e){}
     try { if (rt.pc) rt.pc.close(); } catch(e){}
     if (rt.aani) { try { rt.aani.srcObject = null; } catch(e){} }
     rt.pc = null; rt.dc = null; rt.paalla = false; rt.yhdistaa = false;
-    el("mic").classList.remove("rec");
+    el("mic").classList.remove("rec", "puhuu");
     rtTila("");
   }
 
+  /* ---------- полоска уровня звука ----------
+     Человек должен видеть, что его слышат. Без этого непонятно, идёт
+     ли разговор вообще, и остаётся только гадать — на этом и выходит
+     ощущение мёртвой кнопки. */
+  function rtMittari(s){
+    rtMittariPois();
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      rt.actx = new AC();
+      // Браузер создаёт звуковой контекст приостановленным, пока не
+      // увидит жест человека. Проверка 27.11.2026: без этого анализатор
+      // молчит и полоска уровня не дышит вовсе.
+      if (rt.actx.state === "suspended" && rt.actx.resume){
+        try { rt.actx.resume(); } catch(e){}
+      }
+      var src = rt.actx.createMediaStreamSource(s);
+      var an = rt.actx.createAnalyser();
+      an.fftSize = 512;
+      src.connect(an);
+      var buf = new Uint8Array(an.frequencyBinCount);
+      var mic = el("mic");
+      rt.mittari = setInterval(function(){
+        an.getByteTimeDomainData(buf);
+        var summa = 0;
+        for (var i=0;i<buf.length;i++){ var v = (buf[i]-128)/128; summa += v*v; }
+        var taso = Math.sqrt(summa/buf.length);        // 0…1
+        mic.style.boxShadow = taso > 0.02
+          ? "0 0 0 " + Math.min(18, Math.round(taso*90)) + "px rgba(218,96,96,.28)"
+          : "";
+      }, 100);
+    } catch(e){}
+  }
+
+  function rtMittariPois(){
+    if (rt.mittari) { clearInterval(rt.mittari); rt.mittari = null; }
+    try { if (rt.actx) rt.actx.close(); } catch(e){}
+    rt.actx = null;
+    var mic = el("mic");
+    if (mic) mic.style.boxShadow = "";
+  }
+
+  /* Микрофон спрашиваем ДО ключа: ключ платный и короткоживущий, брать
+     его ради разговора, который не состоится, незачем. */
+  function rtMikrofoni(){
+    var kysy = Promise.resolve("prompt");
+    if (navigator.permissions && navigator.permissions.query){
+      kysy = navigator.permissions.query({name:"microphone"})
+        .then(function(p){ return p.state; })
+        .catch(function(){ return "prompt"; });
+    }
+    return kysy.then(function(tila){
+      if (tila === "denied") throw new Error("NotAllowedError");
+      // Ждём ограниченно: запрос разрешения может не показаться вовсе,
+      // и тогда getUserMedia висит вечно. Замер 27.11.2026: страница
+      // молча стояла на «соединяю» — со стороны мёртвая кнопка.
+      return Promise.race([
+        anna(),
+        new Promise(function(_, hylkaa){
+          setTimeout(function(){ hylkaa(new Error("mic-timeout")); }, 12000);
+        })
+      ]);
+    });
+  }
+
   function rtYhdista(){
-    if (rt.paalla || rt.yhdistaa) { rtKatkaise(); return; }
+    // Второе нажатие кладёт трубку. Быстрый двойной щелчок не должен
+    // поднимать два соединения разом, поэтому «соединяю» тоже считается
+    // занятым состоянием.
+    if (rt.paalla || rt.yhdistaa) { rtKatkaise(true); return; }
     if (!window.RTCPeerConnection || !navigator.mediaDevices){
       rtTila(T("s_ei_tue"));
       return;
     }
     rt.yhdistaa = true;
+    rt.luovu = false;
     rtTila(T("s_yhdistaa") || "…");
 
-    var ek = "", malli = "";
-    fetch(API, {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({
-        mode:"realtime_key",
-        kieli: (el("kieli") ? el("kieli").value : "fi")
-      })
+    var ek = "", malli = "", virta = null;
+    rtMikrofoni()
+    .then(function(s){
+      virta = s;
+      return fetch(API, {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          mode:"realtime_key",
+          kieli: (el("kieli") ? el("kieli").value : "fi")
+        })
+      });
     })
     .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
     .then(function(d){
       if (!d || !d.avain) throw new Error(d && d.error || "no key");
       ek = d.avain; malli = d.malli;
-      return anna();
-    })
-    .then(function(s){
+
       var pc = new RTCPeerConnection();
       rt.pc = pc;
 
@@ -1407,19 +1481,36 @@
       pc.ontrack = function(e){ rt.aani.srcObject = e.streams[0]; };
 
       // микрофон
-      s.getAudioTracks().forEach(function(t){ pc.addTrack(t, s); });
+      virta.getAudioTracks().forEach(function(t){ pc.addTrack(t, virta); });
+
+      // связь оборвалась не по нашей воле — поднимаем заново, один раз
+      pc.onconnectionstatechange = function(){
+        if (pc !== rt.pc) return;
+        if (pc.connectionState === "failed" ||
+            pc.connectionState === "disconnected"){
+          rtKatkaise();
+          if (!rt.luovu && rt.yritykset < 1){
+            rt.yritykset++;
+            rtTila(T("s_yhdistaa") || "…");
+            setTimeout(rtYhdista, 800);
+          } else {
+            puhu("bot", T("yhteys"));
+          }
+        }
+      };
 
       // события: по этому каналу приходят и расшифровка речи, и вызовы функции
       var dc = pc.createDataChannel("oai-events");
       rt.dc = dc;
       dc.onopen = function(){
-        rt.paalla = true; rt.yhdistaa = false;
+        rt.paalla = true; rt.yhdistaa = false; rt.yritykset = 0;
         el("mic").classList.add("rec");
         rtTila(T("s_kuuntelen"));
+        rtMittari(virta);
         opastusPois();
       };
       dc.onmessage = function(e){ rtTapahtuma(e.data); };
-      dc.onclose = function(){ rtKatkaise(); };
+      dc.onclose = function(){ if (pc === rt.pc) rtKatkaise(); };
 
       return pc.createOffer().then(function(offer){
         return pc.setLocalDescription(offer).then(function(){ return offer; });
@@ -1441,9 +1532,33 @@
     })
     .catch(function(e){
       rtKatkaise();
-      puhu("bot", T("yhteys"));
-      rtTila(String(e && e.message || e));
+      // Смотрим и name, и message: у настоящей ошибки браузера причина
+      // лежит в name, а у той, что бросаем мы сами, name всегда "Error"
+      // и причина уходит в message. Проверка 27.11.2026 поймала это:
+      // при запрещённом микрофоне страница говорила «связь прервалась».
+      var syy = String((e && e.name) || "") + " " + String((e && e.message) || e);
+      var mikki = ["mic-timeout", "NotAllowedError", "SecurityError",
+                   "NotFoundError", "NotReadableError"].some(function(s){
+        return syy.indexOf(s) >= 0;
+      });
+      if (mikki){
+        rtTila(T("s_salli"));
+        puhu("bot", T("s_salli"));
+      } else {
+        puhu("bot", T("yhteys"));
+        rtTila(syy.trim());
+      }
     });
+  }
+
+  /* Перебить модель: она говорит длинно, а гость уже знает, что хочет
+     сказать. Нажатие на ленту обрывает её речь, как у живого разговора. */
+  function rtKeskeyta(){
+    if (!rt.paalla || !rt.dc || rt.dc.readyState !== "open") return;
+    try {
+      rt.dc.send(JSON.stringify({ type:"response.cancel" }));
+      if (rt.aani) { try { rt.aani.pause(); rt.aani.currentTime = 0; } catch(e){} }
+    } catch(e){}
   }
 
   function rtTapahtuma(raaka){
@@ -1500,6 +1615,9 @@
       rtYhdista();
     });
     mic.addEventListener("contextmenu", function(e){ e.preventDefault(); });
+    // пока модель говорит, нажатие на ленту обрывает её
+    var lenta = el("puhelu");
+    if (lenta) lenta.addEventListener("click", rtKeskeyta);
   })();
 
   /* Разрешение на микрофон браузер спрашивает на КАЖДЫЙ getUserMedia,
